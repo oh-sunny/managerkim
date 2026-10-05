@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>팀 행사·복지 | 운영 공간</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" type="module"></script>
+</head>
+<body>
+  <a class="skip-link" href="#content">본문으로 이동</a>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="주 메뉴">
+      <a class="brand" href="#home"><span class="brand-symbol" aria-hidden="true">✳</span><span>팀 행사·복지<small>함께 일하는 일상</small></span></a>
+      <div class="workspace"><span class="workspace-symbol">팀</span><div>우리 팀 운영 공간<small>행사와 복지를 한곳에서</small></div></div>
+      <div class="nav-label">WORKSPACE</div>
+      <nav id="navigation"></nav>
+      <div class="sidebar-projects"><div class="nav-label">진행 중인 프로젝트</div><div id="sidebar-projects"></div></div>
+      <div class="sidebar-bottom"><span class="avatar">총</span><div>김총무<small>행사·복지 담당자</small></div><span class="online-dot" aria-label="로컬 프로토타입"></span></div>
+    </aside>
+    <div class="workspace-main">
+      <header class="topbar"><div id="breadcrumb">운영 공간 / 홈</div><div class="topbar-right"><span class="demo-badge"><span></span>프로토타입</span><span class="topbar-date">2026. 10. 03 토요일</span><span class="avatar small">총</span></div></header>
+      <main id="content" tabindex="-1"></main>
+      <footer class="app-footer">예시 데이터로 동작하며, 메시지는 실제로 전송되지 않아요.</footer>
+    </div>
+  </div>
+  <dialog id="history-dialog" aria-labelledby="history-dialog-title"></dialog>
+  <dialog id="cancel-dialog" aria-labelledby="cancel-dialog-title"></dialog>
+  <dialog id="send-preview-dialog" aria-labelledby="send-preview-title"></dialog>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

@@ -1,0 +1,384 @@
+<style>
+#benefits-wireframe{--ops-bg:light-dark(#ffffff,#202222);--ops-soft:light-dark(#f4f5f3,#292c2b);--ops-text:light-dark(#242a27,#edf0ed);--ops-muted:light-dark(#626b65,#b0bab3);--ops-line:light-dark(#dce1dc,#48514b);--ops-main:light-dark(#b84b16,#ffc09c);--ops-on-main:light-dark(#ffffff,#322019);--ops-warn:light-dark(#815521,#e7c28f);--ops-note:light-dark(#f8f3e9,#332e25);font-family:'Segoe UI','Malgun Gothic',sans-serif;font-size:14px;line-height:1.6;color:var(--ops-text);background:var(--ops-bg);border:1px solid var(--ops-line);border-radius:10px;overflow-wrap:anywhere}
+#benefits-wireframe *{box-sizing:border-box}
+#benefits-wireframe [hidden]{display:none!important}
+#benefits-wireframe h1,#benefits-wireframe h2,#benefits-wireframe h3,#benefits-wireframe p{margin:0}
+#benefits-wireframe h1{font-size:24px;font-weight:600;line-height:1.35}
+#benefits-wireframe h2{font-size:17px;font-weight:600}
+#benefits-wireframe h3{font-size:15px;font-weight:600}
+#benefits-wireframe button,#benefits-wireframe select,#benefits-wireframe textarea{font:inherit}
+#benefits-wireframe button{background:var(--ops-bg);color:var(--ops-text);border:1px solid var(--ops-line);border-radius:6px;padding:9px 14px;min-height:42px}
+#benefits-wireframe button:disabled{opacity:.45;cursor:default}
+#benefits-wireframe .ops-primary{background:var(--ops-main);color:var(--ops-on-main);border-color:var(--ops-main)}
+#benefits-wireframe .ops-ghost{border-color:transparent;background:transparent;padding:7px 0}
+#benefits-wireframe .ops-muted{color:var(--ops-muted)}
+#benefits-wireframe .ops-small{font-size:12px}
+#benefits-wireframe .ops-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+#benefits-wireframe .ops-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+#benefits-wireframe .ops-header{padding:16px 24px;border-bottom:1px solid var(--ops-line)}
+#benefits-wireframe .ops-brand{font-weight:600;font-size:16px}
+#benefits-wireframe .ops-label{display:inline-block;border:1px solid var(--ops-line);border-radius:4px;padding:2px 7px;font-size:12px;white-space:nowrap;color:var(--ops-muted)}
+#benefits-wireframe .ops-steps{display:flex;gap:10px;padding:12px 24px;background:var(--ops-soft);border-bottom:1px solid var(--ops-line);align-items:center;flex-wrap:wrap}
+#benefits-wireframe .ops-steps button{border:0;background:transparent;color:var(--ops-muted);padding:4px 2px;min-height:30px}
+#benefits-wireframe .ops-steps button[aria-current="step"]{color:var(--ops-text);font-weight:600}
+#benefits-wireframe .ops-step-arrow{color:var(--ops-muted)}
+#benefits-wireframe .ops-main{padding:24px;--ops-gap:20px}
+#benefits-wireframe .ops-title{margin-bottom:22px}
+#benefits-wireframe .ops-title p{margin-top:7px;color:var(--ops-muted)}
+#benefits-wireframe .ops-ticket{border:1px solid var(--ops-line);border-radius:7px;margin-bottom:12px;padding:var(--ops-gap)}
+#benefits-wireframe .ops-ticket p{margin:8px 0 14px;color:var(--ops-muted)}
+#benefits-wireframe .ops-ticket-title{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+#benefits-wireframe .ops-priority{font-size:12px;color:var(--ops-warn);border:1px solid var(--ops-line);padding:2px 6px;border-radius:4px}
+#benefits-wireframe .ops-note{padding:16px;background:var(--ops-note);border-radius:6px;border-left:3px solid var(--ops-warn)}
+#benefits-wireframe .ops-section{margin-top:24px}
+#benefits-wireframe .ops-section h2{margin-bottom:12px}
+#benefits-wireframe .ops-overview{display:flex;flex-wrap:wrap;gap:12px 24px;padding:16px 0;border-bottom:1px solid var(--ops-line)}
+#benefits-wireframe .ops-overview strong{font-weight:600;margin-left:6px}
+#benefits-wireframe .ops-grid{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(0,1fr);gap:24px}
+#benefits-wireframe .ops-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:20px 0}
+#benefits-wireframe .ops-metric{padding:12px;background:var(--ops-soft);border-radius:6px}
+#benefits-wireframe .ops-value{display:block;font-size:24px;font-weight:600;font-variant-numeric:tabular-nums}
+#benefits-wireframe .ops-compare{display:grid;grid-template-columns:100px minmax(0,1fr) 50px;gap:10px;align-items:center;margin:12px 0}
+#benefits-wireframe .ops-track{height:10px;background:var(--ops-soft);border-radius:2px;overflow:hidden}
+#benefits-wireframe .ops-fill{height:100%;background:var(--ops-main)}
+#benefits-wireframe .ops-fill-past{height:100%;background:var(--ops-muted)}
+#benefits-wireframe .ops-line{border-top:1px solid var(--ops-line);padding:12px 0}
+#benefits-wireframe .ops-panel{border:1px solid var(--ops-line);border-radius:7px;padding:var(--ops-gap);min-width:0}
+#benefits-wireframe .ops-panel h2{margin-bottom:12px}
+#benefits-wireframe label{display:block}
+#benefits-wireframe select,#benefits-wireframe textarea{display:block;width:100%;min-width:0;background:var(--ops-bg);color:var(--ops-text);border:1px solid var(--ops-line);border-radius:6px;padding:10px;margin-top:6px}
+#benefits-wireframe textarea{min-height:240px;resize:vertical;font-size:16px}
+#benefits-wireframe .ops-field{margin-bottom:16px}
+#benefits-wireframe .ops-check{display:flex;align-items:flex-start;gap:9px;padding:10px 0;min-height:44px}
+#benefits-wireframe .ops-team-group{border:0;padding:0;margin:12px 0}
+#benefits-wireframe .ops-team-group legend{padding:0;font-weight:500}
+#benefits-wireframe .ops-team-choice{display:flex;align-items:center;gap:8px;padding:7px 0;min-height:40px;border-bottom:1px solid var(--ops-line)}
+#benefits-wireframe .ops-team-choice input{margin-top:0}
+#benefits-wireframe .ops-team-choice .ops-muted{margin-left:auto;font-size:12px}
+#benefits-wireframe input[type="checkbox"]{width:17px;height:17px;flex-shrink:0;margin-top:4px;accent-color:var(--ops-main)}
+#benefits-wireframe table{width:100%;border-collapse:collapse;font-size:12px}
+#benefits-wireframe th,#benefits-wireframe td{padding:9px 5px;text-align:left;border-bottom:1px solid var(--ops-line);vertical-align:top;font-weight:400}
+#benefits-wireframe th{color:var(--ops-muted)}
+#benefits-wireframe .ops-pager{margin-top:12px}
+#benefits-wireframe .ops-footer{margin-top:22px;padding-top:16px;border-top:1px solid var(--ops-line)}
+#benefits-wireframe .ops-error{color:var(--ops-warn);margin-top:8px}
+#benefits-wireframe .ops-result{margin-top:20px;background:var(--ops-soft);padding:18px;border-radius:7px}
+#benefits-wireframe .ops-dashboard{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}
+#benefits-wireframe .ops-stat{padding:10px 0}
+#benefits-wireframe .ops-stat strong{display:block;font-size:20px;font-weight:600}
+#benefits-wireframe .ops-calendar{margin-top:18px}
+#benefits-wireframe .ops-calendar-head{margin-bottom:12px}
+#benefits-wireframe .ops-calendar-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+#benefits-wireframe .ops-weekday{text-align:center;color:var(--ops-muted);font-size:12px;padding:5px 0}
+#benefits-wireframe .ops-day{min-width:0;min-height:82px!important;padding:7px!important;display:flex;flex-direction:column;align-items:flex-start;gap:4px;text-align:left}
+#benefits-wireframe .ops-day[aria-pressed="true"]{border-color:var(--ops-main);background:var(--ops-soft)}
+#benefits-wireframe .ops-day-today{font-weight:600;color:var(--ops-main)}
+#benefits-wireframe .ops-day-mark{font-size:11px;line-height:1.2;display:block}
+#benefits-wireframe .ops-calendar-legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--ops-muted);margin:12px 0}
+#benefits-wireframe .ops-calendar-detail{margin-top:16px}
+#benefits-wireframe .ops-calendar-detail h3{margin-bottom:8px}
+#benefits-wireframe .ops-actions button[aria-pressed="true"]{background:var(--ops-main);color:var(--ops-on-main);border-color:var(--ops-main)}
+@media(max-width:500px){#benefits-wireframe .ops-day{min-height:70px!important;padding:4px!important}#benefits-wireframe .ops-day-mark{font-size:11px;white-space:nowrap}#benefits-wireframe .ops-day-count,#benefits-wireframe .ops-today-label{display:none}#benefits-wireframe .ops-calendar-grid{gap:2px}}
+@media(max-width:650px){#benefits-wireframe .ops-header,#benefits-wireframe .ops-steps{padding-left:16px;padding-right:16px}#benefits-wireframe .ops-main{padding:18px 16px}#benefits-wireframe .ops-grid{grid-template-columns:1fr}#benefits-wireframe .ops-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}#benefits-wireframe h1{font-size:21px}#benefits-wireframe .ops-dashboard{grid-template-columns:repeat(2,minmax(0,1fr))}#benefits-wireframe .ops-compare{grid-template-columns:80px minmax(0,1fr) 42px}#benefits-wireframe .ops-label{white-space:normal}}
+@media(pointer:coarse){#benefits-wireframe button,#benefits-wireframe .ops-steps button{min-height:44px}#benefits-wireframe select{font-size:16px}}
+</style>
+<div id="benefits-wireframe" lang="ko" aria-label="팀 행사와 복지 운영 프로토타입">
+  <header class="ops-header ops-row">
+    <span class="ops-brand">팀 행사·복지</span>
+    <span class="ops-label">프로토타입 · 예시 데이터 · 실제 전송 없음</span>
+  </header>
+  <nav class="ops-steps" aria-label="업무 처리 흐름">
+    <button type="button" class="cursor-interaction" data-step="tasks" aria-current="step">1 확인할 일</button>
+    <span class="ops-step-arrow" aria-hidden="true">→</span>
+    <button type="button" class="cursor-interaction" data-step="detail">2 프로젝트 살펴보기</button>
+    <span class="ops-step-arrow" aria-hidden="true">→</span>
+    <button type="button" class="cursor-interaction" data-step="review">3 보낼 내용 확인</button>
+  </nav>
+  <main class="ops-main" aria-label="업무 화면">
+    <section data-screen="tasks" aria-label="확인할 일">
+      <div class="ops-title"><h1>오늘 확인할 일</h1><p>동료들에게 안내할 내용을 확인해주세요. <span class="ops-small">예시 기준일 2026.10.03</span></p></div>
+      <div id="ops-tickets"></div>
+      <section class="ops-section" aria-label="팀 행사와 복지 일정">
+        <h2>팀 행사와 복지 일정</h2>
+        <div class="ops-dashboard">
+          <div class="ops-stat"><span class="ops-muted">진행 중</span><strong>3</strong></div>
+          <div class="ops-stat"><span class="ops-muted">확인할 일 있음</span><strong id="ops-action-count">3</strong></div>
+          <div class="ops-stat"><span class="ops-muted">곧 마감</span><strong>1</strong></div>
+          <div class="ops-stat"><span class="ops-muted">완료</span><strong>0</strong></div>
+        </div>
+        <div class="ops-row"><span class="ops-muted ops-small">신청 마감과 행사 일정을 함께 확인해요.</span><div class="ops-actions" aria-label="일정 보기 방식"><button type="button" id="ops-view-calendar" class="cursor-interaction" aria-pressed="true">캘린더</button><button type="button" id="ops-view-list" class="cursor-interaction" aria-pressed="false">목록</button></div></div>
+        <div id="ops-calendar" class="ops-calendar" aria-label="프로젝트 월간 캘린더">
+          <div class="ops-row ops-calendar-head"><h3 id="ops-month-label"></h3><div class="ops-actions"><button type="button" id="ops-month-prev" class="cursor-interaction" aria-label="이전 달">←</button><button type="button" id="ops-month-today" class="cursor-interaction">이번 달</button><button type="button" id="ops-month-next" class="cursor-interaction" aria-label="다음 달">→</button></div></div>
+          <div class="ops-calendar-grid" aria-hidden="true"><span class="ops-weekday">월</span><span class="ops-weekday">화</span><span class="ops-weekday">수</span><span class="ops-weekday">목</span><span class="ops-weekday">금</span><span class="ops-weekday">토</span><span class="ops-weekday">일</span></div>
+          <div id="ops-calendar-days" class="ops-calendar-grid" aria-label="날짜 선택"></div>
+          <div class="ops-calendar-legend"><span>마감 · 신청 마감일</span><span>행사 · 행사일 또는 운영 종료일</span><span>안내 · D-7·D-3·D-1 예정</span></div>
+          <div class="ops-calendar-detail" aria-live="polite"><h3 id="ops-selected-date"></h3><div id="ops-selected-events"></div></div>
+        </div>
+        <div id="ops-projects" hidden></div>
+      </section>
+    </section>
+    <section data-screen="detail" aria-label="프로젝트 살펴보기" hidden>
+      <button type="button" class="ops-ghost cursor-interaction" data-step="tasks">← 확인할 일</button>
+      <div class="ops-title ops-row"><div><h1 id="ops-project-title">가을 워크숍</h1><p id="ops-project-meta"></p></div><span class="ops-label" id="ops-project-status">확인할 일 있음</span></div>
+      <div class="ops-metrics" id="ops-metrics"></div>
+      <div class="ops-grid">
+        <section class="ops-panel" aria-label="판단 근거">
+          <h2>안내가 필요한 이유</h2>
+          <div class="ops-note"><h3 id="ops-recommendation"></h3><p id="ops-reason"></p></div>
+          <div id="ops-comparison" class="ops-section">
+            <h3>같은 마감 시점의 신청률</h3>
+            <div class="ops-compare"><span>이번 프로젝트</span><div class="ops-track"><div id="ops-current-bar" class="ops-fill"></div></div><strong id="ops-current-rate"></strong></div>
+            <div class="ops-compare"><span>과거 평균</span><div class="ops-track"><div class="ops-fill-past" style="width:64%"></div></div><strong>64%</strong></div>
+            <p class="ops-muted ops-small">유사 워크숍 3건의 D-5 기록과 비교 · 예시 데이터 기준</p>
+          </div>
+          <div class="ops-footer ops-row"><span class="ops-muted ops-small">내용을 확인한 뒤 보내요</span><button type="button" id="ops-review-btn" class="ops-primary cursor-interaction" data-step="review">보낼 내용 확인하기 →</button></div>
+        </section>
+        <section aria-label="프로젝트 일정과 이력">
+          <h2>일정과 기록</h2>
+          <div class="ops-line"><span class="ops-muted ops-small">신청 마감</span><p id="ops-deadline"></p></div>
+          <div class="ops-line"><span class="ops-muted ops-small">다음 안내 일정</span><p id="ops-next-action"></p></div>
+          <div class="ops-line"><span class="ops-muted ops-small">최근 보낸 안내</span><p id="ops-history"></p></div>
+          <div class="ops-line"><span class="ops-muted ops-small">함께 볼 자료</span><p id="ops-reference"></p></div>
+        </section>
+      </div>
+    </section>
+    <section data-screen="review" aria-label="보낼 내용 확인" hidden>
+      <button type="button" class="ops-ghost cursor-interaction" data-step="detail">← 프로젝트 살펴보기</button>
+      <div class="ops-title"><h1>보낼 내용 확인</h1><p id="ops-review-meta"></p></div>
+      <div class="ops-grid">
+        <section class="ops-panel" aria-label="메시지 초안">
+          <h2 id="ops-draft-title">메시지 초안</h2>
+          <div class="ops-field"><label for="ops-tone">말투</label><select id="ops-tone"><option value="friendly">친근하고 밝게</option><option value="concise">친근하고 간결하게</option><option value="action">친근하고 행동을 명확하게</option></select></div>
+          <button type="button" id="ops-tone-apply" class="cursor-interaction">선택한 말투로 바꾸기</button>
+          <p id="ops-tone-confirm" class="ops-small ops-muted" hidden>직접 수정한 내용이 바뀌어요. 한 번 더 누르면 적용해요.</p>
+          <div class="ops-field ops-section"><label for="ops-message">메시지 본문</label><textarea id="ops-message" spellcheck="false"></textarea></div>
+          <p class="ops-muted ops-small">예시로 준비한 초안이에요. 자유롭게 수정해주세요.</p>
+        </section>
+        <section class="ops-panel" aria-label="안내받을 동료">
+          <h2>보내는 방법과 대상</h2>
+          <div class="ops-field"><label for="ops-delivery">어떻게 보낼까요?</label><select id="ops-delivery"><option value="dm">DM 보내기</option><option value="channel">Slack 채널에 보내기</option></select></div>
+          <div id="ops-dm-settings">
+            <div class="ops-field"><label for="ops-audience">누구에게 보낼까요?</label><select id="ops-audience"><option value="pending">아직 신청하지 않은 동료</option><option value="project">프로젝트에 함께할 모든 동료</option><option value="company">모든 동료</option></select></div>
+            <fieldset class="ops-team-group"><legend>받을 동료를 팀별로 선택</legend><label class="ops-team-choice"><input type="checkbox" id="ops-all-teams"><span>전체 팀 선택</span></label><div id="ops-team-choices"></div></fieldset>
+            <p class="ops-muted ops-small">한 팀 또는 여러 팀을 선택하면 해당 동료에게 각각 DM을 보내요.</p>
+          </div>
+          <div id="ops-channel-settings" class="ops-field" hidden><label for="ops-channel">어느 채널에 보낼까요?</label><select id="ops-channel"><option value="announcements">#전체-공지 · 모든 동료</option><option value="marketing">#마케팅-공지 · 마케팅팀</option><option value="engineering">#개발-공지 · 개발팀</option><option value="operations">#운영-공지 · 운영팀</option><option value="design">#디자인-공지 · 디자인팀</option></select></div>
+          <div class="ops-line"><div class="ops-row"><strong id="ops-recipient-count"></strong><span class="ops-label" id="ops-required-count"></span></div><p class="ops-muted ops-small" id="ops-recipient-rule"></p></div>
+          <div id="ops-channel-preview" class="ops-note" hidden><h3 id="ops-channel-title"></h3><p id="ops-channel-visibility"></p><p class="ops-muted ops-small">채널에 참여한 모든 동료에게 보여요. 아직 신청하지 않은 동료에게만 안내하려면 DM을 선택하세요.</p></div>
+          <div id="ops-dm-recipients">
+            <table class="ops-section"><caption class="ops-muted ops-small">DM을 받을 동료 (예시)</caption><thead><tr><th scope="col">동료</th><th scope="col">팀</th><th scope="col">신청 상태</th></tr></thead><tbody id="ops-recipient-rows"></tbody></table>
+            <div class="ops-row ops-pager"><span class="ops-muted ops-small" id="ops-page-count"></span><div class="ops-actions"><button type="button" id="ops-prev" class="cursor-interaction" aria-label="이전 동료 목록">이전</button><button type="button" id="ops-next" class="cursor-interaction" aria-label="다음 동료 목록">다음</button></div></div>
+          </div>
+        </section>
+      </div>
+      <div id="ops-approval" class="ops-footer">
+        <label class="ops-check"><input type="checkbox" id="ops-confirm"><span id="ops-confirm-label">보낼 내용과 받는 동료를 확인했어요.</span></label>
+        <div class="ops-row"><span class="ops-muted ops-small">보내기 흐름을 체험할 수 있어요. 실제로 전송되지는 않아요.</span><button type="button" id="ops-send" class="ops-primary cursor-interaction" disabled>확인하고 보내기 (예시)</button></div>
+        <p id="ops-error" class="ops-error" role="alert" hidden></p>
+      </div>
+      <div id="ops-result" class="ops-result" aria-live="polite" hidden><h2 id="ops-result-title">안내를 보냈어요 (예시)</h2><p id="ops-result-count"></p><p class="ops-muted ops-small">실제로 전송되지는 않았어요. 신청 현황은 계속 확인할 수 있어요.</p><div class="ops-actions ops-section"><button type="button" class="cursor-interaction" data-step="detail">기록 확인</button><button type="button" class="ops-primary cursor-interaction" data-step="tasks">확인할 일로 돌아가기</button></div></div>
+    </section>
+    <p id="ops-live" aria-live="polite" class="ops-muted ops-small"></p>
+  </main>
+</div>
+<script>
+(()=>{
+  const root=document.getElementById('benefits-wireframe');
+  const q=(s)=>root.querySelector(s);
+  const projects=[
+    {id:'workshop',name:'가을 워크숍',kind:'신청 안내 한 번 더',priority:'확인해주세요',days:5,total:100,registered:38,required:8,deadline:'2026.10.08 18:00',event:'2026.10.16',owner:'김총무',action:'신청 안내를 한 번 더 보내면 좋겠어요',reason:'현재 신청률은 38%로, 비슷한 워크숍 3건의 D-5 평균 64%보다 26%p 낮아요. 아직 신청하지 않은 동료 62명 중 필수 참여 동료는 8명이에요.',next:'10.05 · D-3 정기 신청 안내',history:'09.28 · D-10 신청 안내 · 80명',reference:'워크숍 기획서 · 지난해 안내 템플릿',initial:false},
+    {id:'health',name:'연례 건강검진',kind:'신청 안내 보내기',priority:'먼저 확인해주세요',days:2,total:120,registered:108,required:5,deadline:'2026.10.05 18:00',event:'2026.10.31까지 운영',owner:'김총무',action:'필수 참여 동료에게 신청 안내를 보내주세요',reason:'신청 마감까지 2일 남았어요. 아직 신청하지 않은 동료 12명 중 필수 참여 동료는 5명이에요. 신청할 수 있도록 한 번 더 안내해주세요.',next:'10.04 · D-1 신청 안내',history:'10.02 · D-3 신청 안내 · 18명',reference:'건강검진 안내 템플릿',initial:false},
+    {id:'event',name:'사내 사진 공모전',kind:'공지 확인하기',priority:'확인을 기다려요',days:10,total:80,registered:0,required:0,deadline:'2026.10.13 18:00',event:'2026.10.20 결과 발표',owner:'김총무',action:'첫 안내 내용을 확인해주세요',reason:'동료 80명에게 보낼 첫 안내가 준비됐어요. 일정과 신청 안내를 확인해주세요.',next:'10.06 · D-7 신청 안내',history:'아직 보낸 안내가 없어요',reference:'사진 공모전 기획서',initial:true}
+  ];
+  const teams=[{id:'marketing',name:'마케팅팀'},{id:'engineering',name:'개발팀'},{id:'operations',name:'운영팀'},{id:'design',name:'디자인팀'}];
+  const employees=Array.from({length:160},(_,i)=>({id:i+1,name:'예시 동료 '+String(i+1).padStart(3,'0'),team:teams[i%4].id}));
+  const channels=[{id:'announcements',name:'#전체-공지',team:null},...teams.map(t=>({id:t.id,name:'#'+t.name.replace('팀','')+'-공지',team:t.id}))];
+  const data={};
+  projects.forEach(p=>{data[p.id]={sent:false,message:draft(p,'friendly'),tone:'friendly',approvedBody:'',approvedTone:'',approvedDelivery:null,confirmed:false,page:0,mode:'dm',scope:p.initial?'project':'pending',teams:teams.map(t=>t.id),channel:'announcements'};});
+  let current='workshop',screen='tasks',toneConfirm=false;
+  const calendar={year:2026,month:9,selected:'2026-10-03',view:'calendar'};
+  const dateKey=d=>d.toISOString().slice(0,10);
+  const schedule=[];
+  projects.forEach(p=>{
+    const close=p.deadline.slice(0,10).replaceAll('.','-');
+    schedule.push({projectId:p.id,date:close,kind:'마감',name:p.name+' 신청 마감',time:p.deadline.slice(11)});
+    const event=p.event.match(/\d{4}\.\d{2}\.\d{2}/)[0].replaceAll('.','-');
+    schedule.push({projectId:p.id,date:event,kind:'행사',name:p.name+(p.id==='health'?' 운영 종료':p.id==='event'?' 결과 발표':' 행사'),time:''});
+    [7,3,1].forEach(days=>{const d=new Date(close+'T00:00:00Z');d.setUTCDate(d.getUTCDate()-days);schedule.push({projectId:p.id,date:dateKey(d),kind:'안내',name:p.name+' 신청 안내 (D-'+days+')',time:'시간 미정'});});
+  });
+  const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const project=()=>projects.find(p=>p.id===current);
+  const recipients=p=>p.initial?p.total:p.total-p.registered;
+  const teamName=id=>teams.find(t=>t.id===id).name;
+  const channelById=id=>channels.find(c=>c.id===id);
+  const isRequired=(p,e)=>e.id>p.registered&&e.id<=p.registered+p.required;
+  function baseAudience(p,scope){return employees.filter(e=>scope==='company'||(scope==='project'?e.id<=p.total:e.id>p.registered&&e.id<=p.total));}
+  function delivery(p,s){
+    const selected=s.sent&&s.approvedDelivery?s.approvedDelivery:s;
+    let list;
+    if(selected.mode==='channel'){const c=channelById(selected.channel);list=employees.filter(e=>!c.team||e.team===c.team);}
+    else list=baseAudience(p,selected.scope).filter(e=>selected.teams.includes(e.team));
+    list=[...list].sort((a,b)=>teams.findIndex(t=>t.id===a.team)-teams.findIndex(t=>t.id===b.team)||a.id-b.id);
+    const scopeName=selected.scope==='company'?'모든 동료':selected.scope==='project'?'프로젝트에 함께할 모든 동료':'아직 신청하지 않은 동료';
+    const teamSummary=selected.teams.length===teams.length?'전체 팀':selected.teams.length?selected.teams.map(teamName).join('·'):'팀 미선택';
+    const summary=selected.mode==='channel'?channelById(selected.channel).name+' · 채널 게시 1건':scopeName+' / '+teamSummary+' · DM '+list.length+'명';
+    return {mode:selected.mode,scope:selected.scope,teams:selected.teams,channel:selected.channel,list,summary,required:list.filter(e=>isRequired(p,e)).length,inProject:list.filter(e=>e.id<=p.total).length,registered:list.filter(e=>e.id<=p.registered).length};
+  }
+  function draft(p,tone){
+    const intro=p.initial?'사내 사진 공모전이 열립니다! 일상 속 멋진 순간을 함께 나눠주세요.':p.name+' 신청을 안내해요.';
+    const friendly='안녕하세요!\n\n'+intro+'\n\n'+p.deadline+'까지 신청해주세요. '+(p.initial?'많은 참여를 기다릴게요.':'이미 신청하셨다면 다시 신청하지 않아도 돼요.')+'\n신청: 사내 신청 페이지 (예시)\n\n궁금한 점은 담당자 '+p.owner+'에게 알려주세요. 감사합니다!';
+    if(tone==='concise')return '안녕하세요! '+p.name+' '+(p.initial?'참여':'신청')+' 안내해요.\n\n마감: '+p.deadline+'\n신청: 사내 신청 페이지 (예시)\n\n참여를 기다릴게요. 감사합니다!';
+    if(tone==='action')return '안녕하세요! '+p.name+' '+(p.initial?'참여를 기다릴게요.':'신청을 잊지 않으셨나요?')+'\n\n'+p.deadline+'까지 사내 신청 페이지에서 신청을 완료해주세요.\n신청: 사내 신청 페이지 (예시)\n\n궁금한 점은 '+p.owner+'에게 알려주세요. 감사합니다!';
+    return friendly;
+  }
+  function save(){
+    const d=delivery(project(),data[current]);
+    if(window.openai&&window.openai.setWidgetState)window.openai.setWidgetState({modelContent:{wireframe:'benefits-agent',screen,project:current,delivery:d.mode,audience:d.summary,calendarDate:calendar.selected,approved:projects.filter(p=>data[p.id].sent).map(p=>p.name)},privateContent:{version:3,current,screen,data,calendar:{...calendar}}}).catch(()=>{});
+  }
+  function renderTasks(){
+    const ordered=[...projects].sort((a,b)=>Number(data[a.id].sent)-Number(data[b.id].sent)||a.days-b.days);
+    q('#ops-tickets').innerHTML=ordered.map(p=>{const s=data[p.id];return '<article class="ops-ticket"><div class="ops-ticket-title"><span class="ops-priority">'+(s.sent?'확인했어요':esc(p.priority))+'</span><h2>'+esc(p.name)+' · '+(s.sent?'보내기 예시 완료':esc(p.kind))+'</h2></div><p>'+(s.sent?'확인한 안내의 보내기 결과를 기록했어요 (예시).':'마감 D-'+p.days+' · '+(p.initial?'첫 안내 대상 '+p.total+'명':'신청 '+p.registered+'/'+p.total+'명 · 신청 전 '+recipients(p)+'명 · 참여가 필요한 동료 중 신청 전 '+p.required+'명'))+'</p><div class="ops-row"><span class="ops-muted ops-small">'+(s.sent?'신청 현황은 계속 확인해요.':p.id==='workshop'?'현재 신청률 38% · 과거 D-5 평균 64%':p.id==='health'?'아직 신청하지 않은 필수 참여 동료 우선 확인':'첫 공지 초안 확인을 기다려요')+'</span><button type="button" class="'+(!s.sent&&p.id==='workshop'?'ops-primary ':'')+'cursor-interaction" data-project="'+p.id+'">'+(s.sent?'기록 확인':'내용 보기 →')+'</button></div></article>';}).join('');
+    q('#ops-action-count').textContent=projects.filter(p=>!data[p.id].sent).length;
+    q('#ops-projects').innerHTML=projects.map(p=>'<div class="ops-line ops-row"><span>'+esc(p.name)+'</span><span class="ops-muted ops-small">'+(data[p.id].sent?'신청 받는 중 · 확인했어요':'확인할 일 있음')+' · 신청률 '+Math.round(p.registered/p.total*100)+'%</span></div>').join('');
+    renderCalendar();
+  }
+  function renderCalendar(){
+    q('#ops-calendar').hidden=calendar.view!=='calendar';q('#ops-projects').hidden=calendar.view!=='list';
+    q('#ops-view-calendar').setAttribute('aria-pressed',String(calendar.view==='calendar'));q('#ops-view-list').setAttribute('aria-pressed',String(calendar.view==='list'));
+    q('#ops-month-label').textContent=calendar.year+'년 '+(calendar.month+1)+'월';
+    const first=new Date(Date.UTC(calendar.year,calendar.month,1));const offset=(first.getUTCDay()+6)%7;const days=new Date(Date.UTC(calendar.year,calendar.month+1,0)).getUTCDate();
+    const cells=Math.ceil((offset+days)/7)*7;
+    q('#ops-calendar-days').innerHTML=Array.from({length:cells},(_,i)=>{
+      const day=i-offset+1;if(day<1||day>days)return '<span aria-hidden="true"></span>';
+      const key=dateKey(new Date(Date.UTC(calendar.year,calendar.month,day))),events=schedule.filter(e=>e.date===key),kinds=['마감','행사','안내'].filter(kind=>events.some(e=>e.kind===kind));
+      const label=calendar.year+'년 '+(calendar.month+1)+'월 '+day+'일'+(events.length?' · '+events.map(e=>e.name).join(', '):' · 예정된 일정 없음');
+      return '<button type="button" class="ops-day cursor-interaction" data-calendar-date="'+key+'" aria-label="'+esc(label)+'" aria-pressed="'+(calendar.selected===key)+'"><span class="'+(key==='2026-10-03'?'ops-day-today':'')+'">'+day+(key==='2026-10-03'?'<span class="ops-today-label"> · 오늘</span>':'')+'</span>'+kinds.map(kind=>'<span class="ops-day-mark">'+kind+'<span class="ops-day-count"> '+events.filter(e=>e.kind===kind).length+'</span></span>').join('')+'</button>';
+    }).join('');
+    const selected=schedule.filter(e=>e.date===calendar.selected);
+    q('#ops-selected-date').textContent=Number(calendar.selected.slice(5,7))+'월 '+Number(calendar.selected.slice(8,10))+'일 일정';
+    q('#ops-selected-events').innerHTML=selected.length?selected.map(e=>'<div class="ops-line ops-row"><div><span class="ops-label">'+e.kind+'</span> '+esc(e.name)+' <span class="ops-muted ops-small">'+esc(e.time)+'</span></div><button type="button" class="cursor-interaction" data-project="'+e.projectId+'">프로젝트 보기</button></div>').join(''):'<p class="ops-muted">이날은 예정된 일정이 없어요.</p>';
+  }
+  function renderDetail(){
+    const p=project(),s=data[p.id];
+    q('#ops-project-title').textContent=p.name;
+    q('#ops-project-meta').textContent='담당자 '+p.owner+' · 행사 '+p.event;
+    q('#ops-project-status').textContent=s.sent?'확인했어요 · 신청 받는 중':'확인할 일 있음 · D-'+p.days;
+    q('#ops-metrics').innerHTML=[['함께할 동료',p.total+'명'],['신청한 동료',p.registered+'명'],['아직 신청하지 않은 동료',recipients(p)+'명'],['아직 신청하지 않은 필수 참여 동료',p.required+'명']].map(([label,value])=>'<div class="ops-metric"><span class="ops-muted ops-small">'+label+'</span><strong class="ops-value">'+value+'</strong></div>').join('');
+    q('#ops-recommendation').textContent=s.sent?'안내 내용을 확인했어요':p.action;
+    q('#ops-reason').textContent=s.sent?'안내를 보냈어요 (예시). 신청 현황과 다음 안내 일정은 계속 확인해요.':p.reason;
+    q('#ops-comparison').hidden=p.id!=='workshop';
+    q('#ops-current-bar').style.width=Math.round(p.registered/p.total*100)+'%';
+    q('#ops-current-rate').textContent=Math.round(p.registered/p.total*100)+'%';
+    q('#ops-deadline').textContent=p.deadline+' · D-'+p.days;
+    q('#ops-next-action').textContent=p.next;
+    q('#ops-history').textContent=s.sent?'10.03 · 실행 예시 · '+delivery(p,s).summary:p.history;
+    q('#ops-reference').textContent=p.reference;
+    q('#ops-review-btn').textContent=s.sent?'보낸 안내 확인 →':'보낼 내용 확인하기 →';
+  }
+  function renderRecipients(){
+    const p=project(),s=data[p.id],d=delivery(p,s),count=d.list.length;
+    s.page=Math.max(0,Math.min(s.page,Math.ceil(count/6)-1));
+    const start=s.page*6,end=Math.min(start+6,count);
+    q('#ops-recipient-rows').innerHTML=d.list.slice(start,end).map(e=>'<tr><td>'+e.name+'</td><td>'+teamName(e.team)+'</td><td>'+(e.id>p.total?'대상 외':isRequired(p,e)?'<strong>필수 · 신청 전</strong>':e.id<=p.registered?'신청 완료':'신청 전')+'</td></tr>').join('');
+    q('#ops-page-count').textContent=count?(start+1)+'–'+end+' / '+count+'명':'선택한 동료가 없어요';
+    q('#ops-prev').disabled=s.page===0;
+    q('#ops-next').disabled=end===count;
+  }
+  function renderReview(){
+    const p=project(),s=data[p.id],d=delivery(p,s);
+    q('#ops-review-meta').textContent=p.name+' · '+(p.initial?'첫 안내':'추가 안내')+' · '+d.summary;
+    q('#ops-draft-title').textContent=d.mode==='channel'?'채널 공지 초안':'Slack DM 초안';
+    q('#ops-message').value=s.sent?s.approvedBody:s.message;
+    q('#ops-message').readOnly=s.sent;
+    q('#ops-tone').value=s.sent?s.approvedTone:s.tone;
+    q('#ops-tone').disabled=s.sent;
+    q('#ops-tone-apply').disabled=s.sent;
+    q('#ops-tone-confirm').hidden=true;toneConfirm=false;
+    q('#ops-delivery').value=d.mode;
+    q('#ops-audience').value=d.scope;
+    q('#ops-channel').value=d.channel;
+    ['#ops-delivery','#ops-audience','#ops-channel','#ops-all-teams'].forEach(id=>q(id).disabled=s.sent);
+    q('#ops-dm-settings').hidden=d.mode!=='dm';
+    q('#ops-channel-settings').hidden=d.mode!=='channel';
+    const base=baseAudience(p,d.scope);
+    q('#ops-team-choices').innerHTML=teams.map(t=>'<label class="ops-team-choice"><input type="checkbox" data-dm-team="'+t.id+'" '+(d.teams.includes(t.id)?'checked ':'')+(s.sent?'disabled':'')+'><span>'+t.name+'</span><span class="ops-muted">'+base.filter(e=>e.team===t.id).length+'명</span></label>').join('');
+    q('#ops-all-teams').checked=d.teams.length===teams.length;
+    q('#ops-all-teams').indeterminate=d.teams.length>0&&d.teams.length<teams.length;
+    q('#ops-dm-recipients').hidden=d.mode!=='dm';
+    q('#ops-channel-preview').hidden=d.mode!=='channel';
+    q('#ops-required-count').hidden=d.mode==='channel';
+    q('#ops-recipient-count').textContent=d.mode==='channel'?'게시 위치 1곳':'DM을 받을 동료 '+d.list.length+'명';
+    q('#ops-required-count').textContent='아직 신청하지 않은 필수 참여 동료 '+d.required+'명 포함';
+    q('#ops-recipient-rule').textContent=d.mode==='channel'?'선택한 채널에 공지 한 건을 올려요.':d.scope==='pending'?'선택한 팀에서 아직 신청하지 않은 동료에게 보내요.':d.scope==='project'?'선택한 팀에서 프로젝트에 함께할 동료예요. 신청한 동료 '+d.registered+'명도 포함해요.':'선택한 팀의 모든 동료에게 보내요. 프로젝트에 함께할 동료 '+d.inProject+'명과 다른 동료 '+(d.list.length-d.inProject)+'명이 포함돼요.';
+    q('#ops-channel-title').textContent=channelById(d.channel).name;
+    q('#ops-channel-visibility').textContent='공개 범위: 채널에 참여한 동료 '+d.list.length+'명 · 프로젝트에 참여하지 않는 동료 '+(d.list.length-d.inProject)+'명 포함';
+    q('#ops-confirm-label').textContent=d.mode==='channel'?'보낼 내용과 게시할 채널·공개 범위를 확인했어요.':'보낼 내용과 DM을 받을 동료를 확인했어요.';
+    q('#ops-confirm').checked=s.confirmed;
+    q('#ops-confirm').disabled=!d.list.length;
+    q('#ops-approval').hidden=s.sent;
+    q('#ops-result').hidden=!s.sent;
+    q('#ops-result-title').textContent=d.mode==='channel'?'채널에 공지를 보냈어요 (예시)':'동료에게 DM을 보냈어요 (예시)';
+    q('#ops-result-count').textContent=d.mode==='channel'?channelById(d.channel).name+' · 게시하기 (예시) 1건 완료 · 공개 범위 '+d.list.length+'명 (열람 확인 없음)':d.summary+' · 보내기 성공 (예시) '+d.list.length+'명 · 실패 0명';
+    q('#ops-send').textContent=d.mode==='channel'?'확인하고 '+channelById(d.channel).name+'에 게시하기 (예시)':'확인하고 '+d.list.length+'명에게 DM 보내기 (예시)';
+    q('#ops-send').disabled=!s.confirmed||!s.message.trim()||s.sent||!d.list.length;
+    q('#ops-error').hidden=!!d.list.length;
+    q('#ops-error').textContent='DM을 보낼 팀을 한 개 이상 선택해주세요.';
+    renderRecipients();
+  }
+  function render(){
+    renderTasks();renderDetail();renderReview();
+    root.querySelectorAll('[data-screen]').forEach(el=>el.hidden=el.dataset.screen!==screen);
+    root.querySelectorAll('.ops-steps [data-step]').forEach(el=>{if(el.dataset.step===screen)el.setAttribute('aria-current','step');else el.removeAttribute('aria-current');});
+  }
+  root.addEventListener('click',e=>{
+    const date=e.target.closest('[data-calendar-date]');if(date){calendar.selected=date.dataset.calendarDate;renderCalendar();save();return;}
+    const pbtn=e.target.closest('[data-project]');if(pbtn){current=pbtn.dataset.project;screen='detail';q('#ops-live').textContent='';render();save();return;}
+    const step=e.target.closest('[data-step]');if(step){screen=step.dataset.step;q('#ops-live').textContent='';render();save();return;}
+  });
+  q('#ops-view-calendar').addEventListener('click',()=>{calendar.view='calendar';renderCalendar();save();});
+  q('#ops-view-list').addEventListener('click',()=>{calendar.view='list';renderCalendar();save();});
+  function changeMonth(delta){const d=new Date(Date.UTC(calendar.year,calendar.month+delta,1));calendar.year=d.getUTCFullYear();calendar.month=d.getUTCMonth();calendar.selected=dateKey(d);renderCalendar();save();}
+  q('#ops-month-prev').addEventListener('click',()=>changeMonth(-1));q('#ops-month-next').addEventListener('click',()=>changeMonth(1));
+  q('#ops-month-today').addEventListener('click',()=>{calendar.year=2026;calendar.month=9;calendar.selected='2026-10-03';renderCalendar();save();});
+  q('#ops-prev').addEventListener('click',()=>{data[current].page--;renderRecipients();});
+  q('#ops-next').addEventListener('click',()=>{data[current].page++;renderRecipients();});
+  function changeDelivery(field,value){const s=data[current];if(s.sent)return;s[field]=value;s.confirmed=false;s.page=0;renderReview();save();q('#ops-live').textContent='보내는 방법과 대상이 바뀌었습니다. 내용과 대상을 다시 확인해주세요.';}
+  [['#ops-delivery','mode'],['#ops-audience','scope'],['#ops-channel','channel']].forEach(([id,field])=>q(id).addEventListener('change',()=>changeDelivery(field,q(id).value)));
+  q('#ops-all-teams').addEventListener('change',()=>changeDelivery('teams',q('#ops-all-teams').checked?teams.map(t=>t.id):[]));
+  q('#ops-team-choices').addEventListener('change',e=>{if(!e.target.dataset.dmTeam)return;const selected=Array.from(q('#ops-team-choices').querySelectorAll('input:checked')).map(el=>el.dataset.dmTeam);changeDelivery('teams',selected);});
+  q('#ops-message').addEventListener('input',()=>{
+    const s=data[current];s.message=q('#ops-message').value;s.confirmed=false;q('#ops-confirm').checked=false;q('#ops-send').disabled=true;
+    q('#ops-error').hidden=!!s.message.trim();q('#ops-error').textContent='메시지 본문을 입력해주세요.';save();
+  });
+  q('#ops-confirm').addEventListener('change',()=>{const s=data[current];s.confirmed=q('#ops-confirm').checked;q('#ops-send').disabled=!s.confirmed||!s.message.trim()||s.sent||!delivery(project(),s).list.length;save();});
+  q('#ops-tone').addEventListener('change',()=>{toneConfirm=false;q('#ops-tone-confirm').hidden=true;});
+  q('#ops-tone-apply').addEventListener('click',()=>{
+    const p=project(),s=data[current];if(s.sent)return;
+    if(s.message!==draft(p,s.tone)&&!toneConfirm){toneConfirm=true;q('#ops-tone-confirm').hidden=false;return;}
+    s.tone=q('#ops-tone').value;s.message=draft(p,s.tone);s.confirmed=false;renderReview();save();
+  });
+  q('#ops-send').addEventListener('click',()=>{
+    const s=data[current];if(s.sent||!s.confirmed||!s.message.trim()||!delivery(project(),s).list.length)return;
+    s.approvedBody=s.message;s.approvedTone=s.tone;s.approvedDelivery={mode:s.mode,scope:s.scope,teams:[...s.teams],channel:s.channel};s.sent=true;renderReview();save();
+    q('#ops-live').textContent=project().name+' 안내를 보냈어요 (예시).';
+  });
+  function restore(snapshot){
+    const v=snapshot&&snapshot.privateContent;if(!v||![1,2,3].includes(v.version)||!projects.some(p=>p.id===v.current))return;
+    current=v.current;screen=['tasks','detail','review'].includes(v.screen)?v.screen:'tasks';
+    const c=v.calendar;if(c&&Number.isInteger(c.year)&&c.year>=2000&&c.year<=2100&&Number.isInteger(c.month)&&c.month>=0&&c.month<=11){calendar.year=c.year;calendar.month=c.month;calendar.view=['calendar','list'].includes(c.view)?c.view:'calendar';const selected=typeof c.selected==='string'?c.selected:'';const prefix=c.year+'-'+String(c.month+1).padStart(2,'0')+'-';calendar.selected=/^\d{4}-\d{2}-\d{2}$/.test(selected)&&selected.startsWith(prefix)&&Number(selected.slice(8))>=1&&Number(selected.slice(8))<=new Date(Date.UTC(c.year,c.month+1,0)).getUTCDate()?selected:prefix+'01';}
+    projects.forEach(p=>{
+      const d=v.data&&v.data[p.id];if(!d)return;const s=data[p.id];
+      s.sent=v.version===3&&!!d.sent;s.message=typeof d.message==='string'?d.message:draft(p,'friendly');s.tone=['friendly','concise','action'].includes(d.tone)?d.tone:'friendly';
+      s.approvedBody=typeof d.approvedBody==='string'?d.approvedBody:'';s.approvedTone=['friendly','concise','action'].includes(d.approvedTone)?d.approvedTone:'friendly';
+      s.mode=['dm','channel'].includes(d.mode)?d.mode:'dm';s.scope=['pending','project','company'].includes(d.scope)?d.scope:d.scope==='team'?'company':(p.initial?'project':'pending');
+      s.teams=Array.isArray(d.teams)?teams.filter(t=>d.teams.includes(t.id)).map(t=>t.id):d.scope==='team'&&teams.some(t=>t.id===d.team)?[d.team]:teams.map(t=>t.id);
+      s.channel=channels.some(c=>c.id===d.channel)?d.channel:'announcements';s.confirmed=v.version===3&&!!d.confirmed;s.page=0;s.approvedDelivery=null;
+      const a=d.approvedDelivery;if(a&&['dm','channel'].includes(a.mode)&&['pending','project','company'].includes(a.scope)&&Array.isArray(a.teams)&&a.teams.every(id=>teams.some(t=>t.id===id))&&channels.some(c=>c.id===a.channel))s.approvedDelivery={mode:a.mode,scope:a.scope,teams:[...new Set(a.teams)],channel:a.channel};
+      if(s.sent&&(!s.approvedBody.trim()||!s.approvedDelivery||!delivery(p,s).list.length))s.sent=false;
+    });
+  }
+  restore(window.openai&&window.openai.widgetState);render();
+  window.addEventListener('openai:set_globals',e=>{if(e.detail&&e.detail.globals&&e.detail.globals.widgetState){restore(e.detail.globals.widgetState);render();}});
+  if(globalThis.Tweak){const layout={gap:20};const tweak=new Tweak({container:root,onChange:()=>q('.ops-main').style.setProperty('--ops-gap',layout.gap+'px')});tweak.addSlider(layout,'gap',{label:'업무 카드 여백',min:12,max:28,step:4,unit:'px'});}
+})();
+</script>

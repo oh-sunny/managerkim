@@ -1,0 +1,24 @@
+# Local secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Dependencies and generated files
+node_modules/
+.next/
+dist/
+build/
+coverage/
+.local-preview/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Local logs and OS metadata
+*.log
+.DS_Store
+Thumbs.db
+Desktop.ini
