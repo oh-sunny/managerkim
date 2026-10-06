@@ -49,9 +49,10 @@ export function applicationBreakdown(status) {
 export function sortTicketsForDisplay(tickets, stateOf, completedAt) {
   return [...tickets].sort((a,b) => {
     const aState=stateOf(a), bState=stateOf(b);
-    const aDone=aState==='done', bDone=bState==='done';
-    if(aDone!==bDone) return aDone?1:-1;
-    if(aDone) return (completedAt(b)||b.date).localeCompare(completedAt(a)||a.date) || a.id.localeCompare(b.id);
-    return a.date.localeCompare(b.date) || (aState==='pending'?0:1)-(bState==='pending'?0:1) || a.id.localeCompare(b.id);
+    const rank=state=>['pending','scheduled','deferred'].includes(state)?0:['dismissed','retired'].includes(state)?1:2;
+    if(rank(aState)!==rank(bState))return rank(aState)-rank(bState);
+    if(rank(aState)===2)return (completedAt(b)||b.date).localeCompare(completedAt(a)||a.date) || a.id.localeCompare(b.id);
+    if(rank(aState)===1)return b.date.localeCompare(a.date)||a.id.localeCompare(b.id);
+    return a.date.localeCompare(b.date)||(aState==='pending'?0:1)-(bState==='pending'?0:1)||a.id.localeCompare(b.id);
   });
 }

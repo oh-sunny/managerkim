@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import {BRIEF_FIELDS} from './notice-generation.mjs';
 
 const MIME = {pdf:'application/pdf',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',txt:'text/plain',md:'text/markdown',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg'};
 const MAX_JSON = 120_000;
@@ -46,9 +47,13 @@ const validDraft = data => data && typeof data==='object' && !Array.isArray(data
   Array.isArray(data.teams) && data.teams.length<=20 && data.teams.every(item=>typeof item==='string') &&
   Array.isArray(data.selectedIds) && data.selectedIds.length<=160 && data.selectedIds.every(Number.isInteger) &&
   Array.isArray(data.channels) && data.channels.length<=20 && data.channels.every(item=>typeof item==='string') &&
-  (!data.resources || Array.isArray(data.resources) && data.resources.length<=20);
+  (!data.resources || Array.isArray(data.resources) && data.resources.length<=20) &&
+  (data.briefStale===undefined||typeof data.briefStale==='boolean') &&
+  (!data.brief || typeof data.brief==='object' && BRIEF_FIELDS.every(key=>
+    data.brief[key] && typeof data.brief[key].value==='string' && data.brief[key].value.length<=2000 &&
+    typeof data.brief[key].included==='boolean' && typeof data.brief[key].source==='string'));
 
-export function createSupabaseApi({url='',key='',fetcher=fetch,analyzer=null,noticeGenerator=null}={}) {
+export function createSupabaseApi({url='',key='',fetcher=fetch,analyzer=null,noticeGenerator=null,holidayCalendar=null}={}) {
   const analyzing = new Set();
   const generating = new Set();
   let base='';
@@ -88,6 +93,11 @@ export function createSupabaseApi({url='',key='',fetcher=fetch,analyzer=null,not
     if(!response.ok)throw new Error(`Supabase 초안 조회 실패 (${response.status})`);
     return (await readUpstream(response))[0]||null;
   };
+  const currentState=async(token)=>{
+    const response=await upstream('/rest/v1/operator_states?select=payload,version,updated_at&limit=1',{},token);
+    if(!response.ok)throw new Error(`Supabase 운영 상태 조회 실패 (${response.status})`);
+    return (await readUpstream(response))[0]||null;
+  };
 
   return async function handleApi(req,res,pathname) {
     try {
@@ -120,9 +130,35 @@ export function createSupabaseApi({url='',key='',fetcher=fetch,analyzer=null,not
       if(pathname==='/api/auth/session' && req.method==='GET'){
         json(res,200,{user:{id:auth.user.id,email:auth.user.email}});return;
       }
+      if(pathname==='/api/state'){
+        if(req.method==='GET'){json(res,200,{state:await currentState(auth.token)});return;}
+        if(req.method!=='PUT'){json(res,405,{error:'GET 또는 PUT 요청을 사용해주세요.'});return;}
+        const input=JSON.parse((await bytes(req,2_200_000)).toString('utf8'));
+        const payload=input?.data;
+        if(!Number.isInteger(input?.expectedVersion)||input.expectedVersion<0||!payload||typeof payload!=='object'||Array.isArray(payload)||
+          !Array.isArray(payload.projects)||!Array.isArray(payload.applications)||!Array.isArray(payload.applicationEvents)||
+          !Array.isArray(payload.records)||!Array.isArray(payload.tickets)||!payload.completed||typeof payload.completed!=='object'||
+          payload.projects.length>100||payload.applications.length>20000||payload.records.length>1000||payload.tickets.length>1000){
+          json(res,400,{error:'운영 상태 형식과 버전을 확인해주세요.'});return;
+        }
+        const response=await upstream('/rest/v1/rpc/save_operator_state',{
+          method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},
+          body:JSON.stringify({p_expected_version:input.expectedVersion,p_payload:payload}),
+        },auth.token);
+        const result=await readUpstream(response);
+        if(!response.ok&&result?.message==='operator_state_conflict'){
+          json(res,409,{error:'다른 탭에서 운영 정보가 변경되었습니다.',current:await currentState(auth.token)});return;
+        }
+        json(res,response.ok?200:502,response.ok?{version:result.version,updated_at:result.updated_at}:{error:'운영 정보를 서버에 저장하지 못했습니다.'});return;
+      }
+      if(pathname==='/api/holidays' && req.method==='POST'){
+        if(!holidayCalendar?.configured){json(res,503,{error:'공휴일 달력을 사용할 수 없습니다.'});return;}
+        const input=JSON.parse((await bytes(req,1000)).toString('utf8'));
+        json(res,200,await holidayCalendar.get(input.years));return;
+      }
       if(pathname==='/api/notices/generate'){
         if(req.method!=='POST'){json(res,405,{error:'POST 요청을 사용해주세요.'});return;}
-        if(!noticeGenerator?.configured){json(res,503,{error:'서버에 Gemma API 키와 모델을 설정해주세요.'});return;}
+        if(!noticeGenerator?.configured){json(res,503,{error:'Gemma API 키와 모델을 설정해주세요.'});return;}
         if(!String(req.headers['content-type']||'').includes('application/json')){json(res,415,{error:'JSON 요청이 필요합니다.'});return;}
         if(generating.has(auth.user.id)){json(res,429,{error:'이미 초안을 생성하고 있습니다. 결과를 기다려주세요.'});return;}
         generating.add(auth.user.id);
@@ -211,7 +247,7 @@ export function createSupabaseApi({url='',key='',fetcher=fetch,analyzer=null,not
     } catch(error){
       if(error instanceof SyntaxError){json(res,400,{error:'JSON 형식을 확인해주세요.'});return;}
       console.error('Supabase API 오류:',error.message);
-      json(res,error.status||502,{error:error.status?error.message:'Supabase 연결에 실패했습니다.'});
+      json(res,error.status||502,{error:error.publicMessage||error.status&&error.message||'Supabase 연결에 실패했습니다.'});
     }
   };
 }

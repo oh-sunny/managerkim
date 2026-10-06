@@ -120,7 +120,7 @@ function checkpoints(project, rules, calendar) {
   for (const daysBefore of rules.requiredCheckDays) {
     entries.push({kind: 'required', trigger: `D-${daysBefore}`, original: atKst(endDay.year, endDay.month, endDay.day - daysBefore, rules.requiredCheckHour)});
   }
-  entries.push({kind: 'required', trigger: 'deadline-4h', original: new Date(deadline.getTime() - rules.finalHoursBefore * 60 * MINUTE_MS)});
+  entries.push({kind: 'required', trigger: `deadline-${rules.finalHoursBefore}h`, original: new Date(deadline.getTime() - rules.finalHoursBefore * 60 * MINUTE_MS)});
   for (const {daysBefore, goalFraction} of rules.voluntaryThresholds) {
     entries.push({kind: 'voluntary', trigger: `D-${daysBefore}`, goalFraction,
       original: atKst(endDay.year, endDay.month, endDay.day - daysBefore, rules.requiredCheckHour)});
@@ -211,9 +211,9 @@ export function evaluateReminderTickets({project, applicationRecords, employees,
     if (due && !condition) continue;
     if (point.kind === 'voluntary' && threshold == null) continue;
     const prior = previous.get(point.key);
-    if (due && ['done', 'dismissed'].includes(prior?.state)) continue;
-    const state = !due ? 'scheduled'
-      : prior?.state === 'deferred' && prior.reviewAt && Date.parse(prior.reviewAt) > nowAt.getTime() ? 'deferred' : 'pending';
+    if (['done', 'dismissed'].includes(prior?.state)) continue;
+    const state = prior?.state === 'deferred' && prior.reviewAt && Date.parse(prior.reviewAt) > nowAt.getTime() ? 'deferred'
+      : !due ? 'scheduled' : 'pending';
     const title = point.kind === 'required' ? '필수 대상 신청 현황 확인' : '자율 신청 목표 확인';
     const reason = point.kind === 'required'
       ? `필수 대상 ${counts.required.target}명 중 신청 전 ${counts.required.pending}명`

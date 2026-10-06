@@ -134,3 +134,25 @@ test('existing pending ticket is retired when its reason disappears', () => {
   const next = run({applicationRecords: [...records([1, 2, 3, 4, 5, 6, 7])], existingTickets: [pending]});
   assert.deepEqual(next.retiredKeys, [pending.key]);
 });
+
+test('dismissed checkpoints stay dismissed and deferred checkpoints keep their review time', () => {
+  const first = run();
+  const pending = first.tickets.find(ticket => ticket.kind === 'required' && ticket.state === 'pending');
+  const future = first.tickets.find(ticket => ticket.kind === 'required' && ticket.state === 'scheduled');
+  const next = run({existingTickets: [
+    {...pending, state: 'dismissed', decisionReason: '이번에는 안내하지 않음'},
+    {...future, state: 'deferred', reviewAt: '2026-10-10T09:00:00+09:00', decisionReason: '담당자 확인 대기'},
+  ]});
+  assert.equal(next.tickets.some(ticket => ticket.key === pending.key), false);
+  assert.equal(next.tickets.find(ticket => ticket.key === future.key).state, 'deferred');
+});
+
+test('project policy changes checkpoint hour and final reminder interval', () => {
+  const customized = run({project: {...project, reminderPolicy: {requiredCheckHour: 11, finalHoursBefore: 6,
+    voluntaryThresholds: [{daysBefore: 3, goalFraction: 0.5}, {daysBefore: 1, goalFraction: 0.9}]}}});
+  const d3 = customized.tickets.find(ticket => ticket.kind === 'required' && ticket.triggers.includes('D-3'));
+  const final = customized.tickets.find(ticket => ticket.triggers.includes('deadline-6h'));
+  assert.equal(d3.dueAt, '2026-10-09T02:00:00.000Z');
+  assert.equal(final.dueAt, '2026-10-12T03:00:00.000Z');
+  assert.equal(customized.tickets.some(ticket => ticket.kind === 'voluntary' && ticket.state === 'pending'), false);
+});

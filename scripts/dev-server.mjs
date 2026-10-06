@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createSupabaseApi } from './supabase-api.mjs';
 import { createDocumentAnalyzer } from './document-analysis.mjs';
 import { createNoticeGenerator } from './notice-generation.mjs';
+import { createPublicHolidayCalendar } from './public-holidays.mjs';
 
 function localEnv() {
   try {
@@ -20,6 +21,7 @@ const handleApi=createSupabaseApi({
   key:process.env.SUPABASE_PUBLISHABLE_KEY||env.SUPABASE_PUBLISHABLE_KEY,
   analyzer:createDocumentAnalyzer({apiKey:process.env.GEMINI_API_KEY||env.GEMINI_API_KEY,model:process.env.GEMMA_MODEL||env.GEMMA_MODEL}),
   noticeGenerator:createNoticeGenerator({apiKey:process.env.GEMINI_API_KEY||env.GEMINI_API_KEY,model:process.env.GEMMA_MODEL||env.GEMMA_MODEL}),
+  holidayCalendar:createPublicHolidayCalendar(),
 });
 
 const assets = new Map([
@@ -33,7 +35,7 @@ const assets = new Map([
   ['/analysis-contract.js', ['analysis-contract.js', 'text/javascript; charset=utf-8']],
   ['/document-import.js', ['document-import.js', 'text/javascript; charset=utf-8']],
   ['/message-templates.js', ['message-templates.js', 'text/javascript; charset=utf-8']],
-  ['/notice-draft.js', ['notice-draft.js', 'text/javascript; charset=utf-8']],
+  ['/rule-engine.js', ['rule-engine.js', 'text/javascript; charset=utf-8']],
 ]);
 const requestedPort = process.env.PORT ?? '3000';
 if (!/^\d+$/.test(requestedPort) || Number(requestedPort) < 1 || Number(requestedPort) > 65535) {

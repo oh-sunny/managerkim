@@ -98,6 +98,22 @@ test('draft version conflict returns the current server version',async()=>{
   assert.ok(calls.every(item=>item.options.headers.Authorization==='Bearer test-access'));
 });
 
+test('operational state save uses versioned RPC and exposes conflict without overwriting',async()=>{
+  const payload={schemaVersion:1,projects:[],applications:[],applicationEvents:[],records:[],tickets:[],completed:{}};
+  const calls=[];
+  const handler=createSupabaseApi({...config,fetcher:async(url,options)=>{
+    calls.push({url,options});
+    if(url.endsWith('/auth/v1/user'))return response({id:'user-1'});
+    if(url.endsWith('/rest/v1/rpc/save_operator_state'))return response({message:'operator_state_conflict'},400);
+    if(url.includes('/rest/v1/operator_states?'))return response([{version:3,payload,updated_at:'2026-10-06T00:00:00Z'}]);
+    throw new Error('Unexpected upstream call');
+  }});
+  const result=await call(handler,'/api/state',{method:'PUT',body:{expectedVersion:2,data:payload},headers:cookie});
+  assert.equal(result.status,409);
+  assert.equal(result.body.current.version,3);
+  assert.deepEqual(JSON.parse(calls.find(row=>row.url.endsWith('/rest/v1/rpc/save_operator_state')).options.body),{p_expected_version:2,p_payload:payload});
+});
+
 test('authenticated file upload stores bytes privately and records its hash',async()=>{
   const calls=[];
   const handler=createSupabaseApi({...config,fetcher:async(url,options)=>{

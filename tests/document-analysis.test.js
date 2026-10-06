@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { readDocuments, applyOcr } from '../scripts/document-reader.mjs';
-import { validateAnalysis, createDocumentAnalyzer } from '../scripts/document-analysis.mjs';
+import { evidenceIndex, parseModelJson, validateAnalysis, createDocumentAnalyzer } from '../scripts/document-analysis.mjs';
 import { applicableValue } from '../prototype/analysis-contract.js';
 import { scannedPdf } from './helpers/scanned-pdf.mjs';
 
@@ -65,4 +65,54 @@ test('model failures and invalid JSON return safe actionable errors without expo
   await assert.rejects(analyzer.analyze(input([textFile('a.txt','행사명: 샘플')])),error=>error.status===402&&!error.message.includes('test-secret'));
   const malformed=createDocumentAnalyzer({apiKey:'test',model:'gemma-test',generate:async()=>({text:'not JSON'})});
   await assert.rejects(malformed.analyze(input([textFile('a.txt','행사명: 샘플')])),/응답 형식/);
+});
+
+test('accepts a complete JSON object with Markdown/prose but rejects ambiguous or incomplete output',()=>{
+  const raw={fields:[{field:'name',options:[]}]};
+  for (const text of [JSON.stringify(raw),'```json\n'+JSON.stringify(raw)+'\n```','분석 결과입니다.\n```json\n'+JSON.stringify(raw)+'\n```\n검토해주세요.']) assert.deepEqual(parseModelJson(text),raw);
+  for (const text of ['{"fields":[{"field":"name","options":[]}',JSON.stringify(raw)+'\n'+JSON.stringify(raw),'[ '+JSON.stringify(raw),'설명 {"fields":[]} trailing }']) assert.throws(()=>parseModelJson(text),error=>error.code==='MODEL_JSON');
+  assert.throws(()=>parseModelJson(' '),error=>error.code==='MODEL_EMPTY');
+  assert.throws(()=>parseModelJson('x'.repeat(150001)),error=>error.code==='MODEL_SIZE');
+});
+
+test('retries malformed output once using original documents and still rejects invented evidence',async()=>{
+  const requests=[],diagnostics=[];
+  const valid={fields:[{field:'name',options:[{value:'샘플',evidence:[{sourceId:'source-1',segmentId:'source-1-s1',quote:'행사명: 샘플'}]}]},{field:'owner',options:[{value:'없는 담당자',evidence:[{sourceId:'source-1',segmentId:'source-1-s1',quote:'없는 근거'}]}]}]};
+  const analyzer=createDocumentAnalyzer({apiKey:'test-secret',model:'gemma-test',onDiagnostic:e=>diagnostics.push(e),generate:async request=>{requests.push(request);return {text:requests.length===1?'invalid secret output':JSON.stringify(valid),candidates:[{finishReason:'STOP'}]};}});
+  const result=await analyzer.analyze(input([textFile('a.txt','행사명: 샘플')]));
+  assert.equal(requests.length,2);assert.deepEqual(requests[0].contents,requests[1].contents);
+  assert.match(requests[1].config.systemInstruction,/이전 응답/);
+  assert.ok(requests[1].config.httpOptions.timeout<=65000);
+  assert.equal(result.fields.find(f=>f.field==='name').options[0].value,'샘플');
+  assert.equal(result.fields.find(f=>f.field==='owner').status,'review');
+  assert.equal(diagnostics[0].code,'MODEL_JSON');assert.equal(diagnostics[0].retry,true);
+  assert.doesNotMatch(JSON.stringify(diagnostics),/test-secret|invalid secret output|행사명/);
+});
+
+test('never accepts a truncated or blocked response even if its text is valid JSON',async()=>{
+  for (const [reason,code,calls] of [['MAX_TOKENS','MODEL_TRUNCATED',2],['SAFETY','MODEL_BLOCKED',1]]) {
+    let count=0;
+    const analyzer=createDocumentAnalyzer({apiKey:'test',model:'gemma-test',onDiagnostic:()=>{},generate:async()=>{count++;return {text:'{"fields":[{"field":"name","options":[]}]}',candidates:[{finishReason:reason}]};}});
+    await assert.rejects(analyzer.analyze(input([textFile('a.txt','행사명: 샘플')])),error=>error.code===code);
+    assert.equal(count,calls);
+  }
+});
+
+test('OCR and extraction share one retry budget for the whole analysis',async()=>{
+  let count=0;
+  const analyzer=createDocumentAnalyzer({apiKey:'test',model:'gemma-test',onDiagnostic:()=>{},reader:async()=>({sources:[{id:'source-1',name:'a.pdf',segments:[],warnings:[]}],images:[{id:'source-1-p1',sourceId:'source-1',page:1,data:''}]}),generate:async()=>{count++;return {text:count===2?JSON.stringify({pages:[{id:'source-1-p1',text:'행사명: 샘플'}]}):'invalid'};}});
+  await assert.rejects(analyzer.analyze(input([])),error=>error.code==='MODEL_JSON');
+  assert.equal(count,3);
+});
+
+test('compact evidence IDs resolve to literal source excerpts and reject invented IDs',async()=>{
+  const {sources}=await readDocuments(input([textFile('health.txt','대상: 임직원 120명\n신청: 로그인 → 기관 선택 → 제출\n예약 확정은 별도 안내합니다.\nhttps://example.org/health/apply')]));
+  const refs=evidenceIndex(sources);
+  assert.ok(refs.every(ref=>sources[0].segments.find(s=>s.id===ref.segmentId).text.includes(ref.quote)));
+  assert.ok(refs.some(ref=>ref.quote.includes('https://example.org/health/apply')));
+  const applyRef=refs.find(ref=>ref.quote.includes('로그인'));
+  const fields=validateAnalysis({fields:[{field:'requirements',options:[{value:'로그인 → 기관 선택 → 제출',evidence:[applyRef.id]}]},{field:'owner',options:[{value:'가짜 담당자',evidence:['e99999']}]}]},sources,refs);
+  assert.equal(fields.find(f=>f.field==='requirements').options[0].evidence[0].quote,applyRef.quote);
+  assert.equal(fields.find(f=>f.field==='owner').status,'review');
+  assert.equal(fields.find(f=>f.field==='owner').options.length,0);
 });
