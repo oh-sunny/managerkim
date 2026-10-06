@@ -710,7 +710,7 @@ function render() {
     const t=getTicket(r.id),d=getDraft(t),all=$('#all-teams');
     if(all)all.indeterminate=d.teams.length>0&&d.teams.length<TEAMS.length;
     const toneField=$('#draft-tone')?.closest('.field');
-    if(toneField){toneField.querySelector('.help').textContent='말투를 바꾼 뒤 정보 카드로 새 초안을 생성하세요. 현재 본문은 선택하기 전까지 유지됩니다.';toneField.insertAdjacentHTML('afterend',`<div class="field"><label for="notice-purpose">공지 목적</label><select id="notice-purpose">${Object.entries(NOTICE_PURPOSES).map(([key,label])=>`<option value="${key}" ${d.purpose===key?'selected':''}>${label}</option>`).join('')}</select></div>`);}
+    if(toneField){toneField.querySelector('.help').textContent='말투를 바꾸면 Gemma가 새 초안을 자동 생성합니다. 직접 고친 본문은 새 초안을 선택하기 전까지 유지돼요.';toneField.insertAdjacentHTML('afterend',`<div class="field"><label for="notice-purpose">공지 목적</label><select id="notice-purpose">${Object.entries(NOTICE_PURPOSES).map(([key,label])=>`<option value="${key}" ${d.purpose===key?'selected':''}>${label}</option>`).join('')}</select></div>`);}
     $('#draft-body')?.closest('.draft-area')?.insertAdjacentHTML('afterend',noticeCandidateMarkup(t));
     filterRecipientRows();
   }
@@ -944,7 +944,7 @@ document.addEventListener('change',async event=>{
   }
   if(r.view!=='review')return;const t=getTicket(r.id),d=getDraft(t);
   if(el.id==='resource-file'){const file=el.files?.[0];if(!file)return;if(d.resources.length>=20){toast('자료는 20개까지 추가할 수 있어요.');return;}await uploadNoticeFile(t,file);return;}
-  if(el.id==='draft-tone'||el.id==='notice-purpose'){d[el.id==='draft-tone'?'tone':'purpose']=el.value;d.confirmed=false;updateApproval(t);return;}
+  if(el.id==='draft-tone'||el.id==='notice-purpose'){d[el.id==='draft-tone'?'tone':'purpose']=el.value;d.confirmed=false;updateApproval(t);void generateNoticeDraft(t);return;}
   if(el.dataset.briefInclude){d.brief[el.dataset.briefInclude].included=el.checked;d.briefStale=true;d.confirmed=false;updateApproval(t);return;}
   if(el.id==='audience-scope')d.scope=el.value;
   else if(el.id==='all-teams')d.teams=el.checked?TEAMS.map(t=>t.id):[];
