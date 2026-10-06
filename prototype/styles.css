@@ -35,5 +35,6 @@ dialog{border:1px solid #e5eae3;border-radius:14px;box-shadow:0 24px 90px #192f2
 .resource-add input{min-width:0;flex:1;border:1px solid #dde4de;border-radius:7px;padding:9px 10px;font-size:11px}
 .draft-attachments input[type=file]{width:100%;font-size:11px;margin-top:7px}
 .history-resources{margin:18px 0 22px}
+.notice-controls{margin:18px 0 24px;padding-bottom:18px;border-bottom:1px solid var(--border)}.notice-controls>.help{margin:10px 0;line-height:1.7}.notice-controls a{color:var(--orange);text-decoration:underline}.notice-controls [role=status]{font-size:12px;color:#a44521;line-height:1.7;margin-top:10px}.notice-candidate{margin-top:18px;padding:16px;background:#f5f8f5;border:1px solid #dce6dd;border-radius:9px}.notice-candidate h3{margin-bottom:10px}.notice-candidate .message-original{white-space:pre-wrap;overflow-wrap:anywhere;max-height:500px;overflow:auto}.notice-candidate .help{margin:12px 0}.notice-candidate .actions{flex-wrap:wrap}
 #cloud-login-form .field{margin-bottom:14px}
 @media(max-width:650px){.resource-add{flex-wrap:wrap}.resource-add input{flex-basis:100%}.topbar-right{gap:6px}#cloud-open{max-width:145px;overflow:hidden;text-overflow:ellipsis}}

@@ -25,6 +25,39 @@ const config={url:'https://example.supabase.co',key:'sb_publishable_test'};
 const cookie={cookie:'sb_access=test-access'};
 const draft={body:'공지',tone:'friendly',mode:'dm',scope:'pending',teams:['marketing'],dmSelection:'team',selectedIds:[],channels:[],resources:[]};
 
+test('notice generation uses its own authenticated, bounded JSON route',async()=>{
+  let calls=0;
+  const noticeGenerator={configured:true,generate:async input=>{calls++;assert.deepEqual(input,{purpose:'initial'});return {body:'generated'};}};
+  const handler=createSupabaseApi({...config,noticeGenerator,fetcher:async()=>response({id:'user-1'})});
+  const path='/api/notices/generate',options={method:'POST',body:{purpose:'initial'},headers:{...cookie,'content-type':'application/json'}};
+  assert.equal((await call(handler,path,{...options,headers:{}})).status,401);
+  assert.equal((await call(handler,path,{...options,headers:{...options.headers,origin:'https://other.example'}})).status,403);
+  assert.equal((await call(handler,path,{...options,method:'GET'})).status,405);
+  assert.equal((await call(handler,path,{...options,headers:cookie})).status,415);
+  assert.equal((await call(handler,path,{...options,body:'{'})).status,400);
+  assert.equal((await call(handler,path,{...options,body:'a'.repeat(120001)})).status,413);
+  assert.equal((await call(handler,path,options)).body.body,'generated');
+  assert.equal(calls,1);
+  const unavailable=createSupabaseApi({...config,fetcher:async()=>response({id:'user-1'})});
+  assert.equal((await call(unavailable,path,options)).status,503);
+});
+
+test('notice concurrency lock is released on failure and safe errors omit provider details',async()=>{
+  let release;
+  const blocked=new Promise(resolve=>{release=resolve;});
+  const noticeGenerator={configured:true,generate:async()=>{await blocked;throw new Error('secret-key');}};
+  const handler=createSupabaseApi({...config,noticeGenerator,fetcher:async()=>response({id:'user-1'})});
+  const options={method:'POST',body:{},headers:{...cookie,'content-type':'application/json'}};
+  const first=call(handler,'/api/notices/generate',options);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal((await call(handler,'/api/notices/generate',options)).status,429);
+  release();
+  const result=await first;
+  assert.equal(result.status,502);assert.doesNotMatch(result.body.error,/secret-key/);
+  noticeGenerator.generate=async()=>({body:'retry succeeded'});
+  assert.equal((await call(handler,'/api/notices/generate',options)).status,200);
+});
+
 test('configured API requires authentication and rejects cross-origin mutations',async()=>{
   const handler=createSupabaseApi({...config,fetcher:async()=>response({},401)});
   assert.deepEqual((await call(handler,'/api/status')).body,{configured:true});
