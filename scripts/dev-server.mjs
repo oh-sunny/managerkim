@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { createSupabaseApi } from './supabase-api.mjs';
+import { createDocumentAnalyzer } from './document-analysis.mjs';
 
 function localEnv() {
   try {
@@ -16,15 +17,19 @@ const env=localEnv();
 const handleApi=createSupabaseApi({
   url:process.env.SUPABASE_URL||env.SUPABASE_URL,
   key:process.env.SUPABASE_PUBLISHABLE_KEY||env.SUPABASE_PUBLISHABLE_KEY,
+  analyzer:createDocumentAnalyzer({apiKey:process.env.GEMINI_API_KEY||env.GEMINI_API_KEY,model:process.env.GEMMA_MODEL||env.GEMMA_MODEL}),
 });
 
 const assets = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ['/index.html', ['index.html', 'text/html; charset=utf-8']],
   ['/styles.css', ['styles.css', 'text/css; charset=utf-8']],
+  ['/document-import.css', ['document-import.css', 'text/css; charset=utf-8']],
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/data.js', ['data.js', 'text/javascript; charset=utf-8']],
   ['/document-extract.js', ['document-extract.js', 'text/javascript; charset=utf-8']],
+  ['/analysis-contract.js', ['analysis-contract.js', 'text/javascript; charset=utf-8']],
+  ['/document-import.js', ['document-import.js', 'text/javascript; charset=utf-8']],
   ['/message-templates.js', ['message-templates.js', 'text/javascript; charset=utf-8']],
 ]);
 const requestedPort = process.env.PORT ?? '3000';

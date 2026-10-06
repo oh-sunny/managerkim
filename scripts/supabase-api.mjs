@@ -47,7 +47,8 @@ const validDraft = data => data && typeof data==='object' && !Array.isArray(data
   Array.isArray(data.channels) && data.channels.length<=20 && data.channels.every(item=>typeof item==='string') &&
   (!data.resources || Array.isArray(data.resources) && data.resources.length<=20);
 
-export function createSupabaseApi({url='',key='',fetcher=fetch}={}) {
+export function createSupabaseApi({url='',key='',fetcher=fetch,analyzer=null}={}) {
+  const analyzing = new Set();
   let base='';
   try {const parsed=new URL(url);if(parsed.protocol==='https:'||parsed.protocol==='http:'&&['localhost','127.0.0.1'].includes(parsed.hostname))base=parsed.origin;} catch {}
   const configured=Boolean(base && key && !key.includes('your_key'));
@@ -116,6 +117,20 @@ export function createSupabaseApi({url='',key='',fetcher=fetch}={}) {
       if(!auth){json(res,401,{error:'Supabase 계정으로 로그인해주세요.'});return;}
       if(pathname==='/api/auth/session' && req.method==='GET'){
         json(res,200,{user:{id:auth.user.id,email:auth.user.email}});return;
+      }
+      if(pathname==='/api/documents/analyze'){
+        if(req.method!=='POST'){json(res,405,{error:'POST 요청을 사용해주세요.'});return;}
+        if(!analyzer?.configured){json(res,503,{error:'서버에 Gemma API 키와 모델을 설정해주세요.'});return;}
+        if(!String(req.headers['content-type']||'').includes('application/json')){json(res,415,{error:'JSON 요청이 필요합니다.'});return;}
+        if(analyzing.has(auth.user.id)){json(res,429,{error:'이미 자료를 분석하고 있습니다. 결과를 기다려주세요.'});return;}
+        analyzing.add(auth.user.id);
+        try {
+          const input=JSON.parse((await bytes(req,4_100_000)).toString('utf8'));
+          json(res,200,await analyzer.analyze(input));
+        } catch(error) {
+          json(res,error instanceof SyntaxError?400:error.status||502,{error:error instanceof SyntaxError?'JSON 형식을 확인해주세요.':error.publicMessage||(error.status===413?'요청 크기 제한을 넘었습니다. 자료를 나누어 올려주세요.':'자료를 분석하지 못했습니다. 다시 시도해주세요.')});
+        } finally {analyzing.delete(auth.user.id);}
+        return;
       }
       if(pathname==='/api/drafts' && req.method==='GET'){
         const response=await upstream('/rest/v1/notice_drafts?select=id,payload,version,updated_at&order=updated_at.desc',{},auth.token);

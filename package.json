@@ -6,9 +6,17 @@
   "scripts": {
     "dev": "node scripts/dev-server.mjs",
     "start": "node scripts/dev-server.mjs",
-    "test": "node --test"
+    "test": "node --test",
+    "test:gemma": "node --env-file=.env scripts/gemma-smoke.mjs"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13.0"
+  },
+  "dependencies": {
+    "@google/genai": "^2.27.0",
+    "@napi-rs/canvas": "^1.0.10",
+    "fast-xml-parser": "^5.11.2",
+    "pdfjs-dist": "^6.4.299",
+    "yauzl": "^3.4.0"
   }
 }

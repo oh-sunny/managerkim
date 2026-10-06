@@ -1,6 +1,6 @@
-/* Local prototype. All send actions are simulated; no Slack/API requests are made. */
+/* Slack sends are simulated. Document analysis and draft storage use authenticated server APIs. */
 import {calculateStatus, setApplication, applicationBreakdown, sortTicketsForDisplay} from './data.js';
-import {extractProjectCandidates} from './document-extract.js';
+import {mountDocumentImport} from './document-import.js';
 import {buildDraftMessage} from './message-templates.js';
 const $ = selector => document.querySelector(selector);
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
@@ -76,9 +76,9 @@ let cancelContext = null;
 let previewContext = null;
 let toastTimeout;
 let projectFormError = '';
-let documentCandidates = [];
-let documentName = '';
 let appliedDocumentName = '';
+let appliedFieldReviews = {};
+let disposeDocumentImport = null;
 let resetArmed = false;
 const status = p => calculateStatus(p,applications,EMPLOYEES);
 const projectCount = p => {const s=status(p);return {...s,total:s.targetIds.length,registered:s.appliedIds.length,required:s.requiredPendingIds.length};};
@@ -257,7 +257,7 @@ async function initializeCloud() {
       if(cloudUser)try {await hydrateCloudDrafts();}catch {for(const t of TICKETS.filter(item=>ticketState(item)==='pending'))if(drafts[t.id])setCloudState(t,'error');}
     }
   } catch {cloudConfigured=false;}
-  renderCloudButton();render();
+  renderCloudButton();if(route().view!=='edit-project')render();
 }
 function renderCloudButton(){
   $('#cloud-open').textContent=!cloudConfigured?'Supabase 설정 필요':cloudUser?`서버 연결 · ${cloudUser.email}`:'Supabase 로그인';
@@ -275,12 +275,12 @@ async function loginCloud(event) {
     const result=await cloudRequest('/api/auth/login',{method:'POST',body:{email:$('#cloud-email').value.trim(),password:$('#cloud-password').value}});
     cloudUser=result.user;
     await hydrateCloudDrafts();
-    closeCloudDialog();renderCloudButton();render();toast('Supabase에 연결했습니다.');
+    closeCloudDialog();renderCloudButton();if(route().view!=='edit-project')render();toast('Supabase에 연결했습니다.');
   } catch(cause) {
     error.textContent=cause.message;error.hidden=false;
     if(cloudUser){
       for(const t of TICKETS.filter(item=>drafts[item.id]))setCloudState(t,'error');
-      closeCloudDialog();renderCloudButton();render();toast(`로그인했지만 ${cause.message}`);
+      closeCloudDialog();renderCloudButton();if(route().view!=='edit-project')render();toast(`로그인했지만 ${cause.message}`);
     }
   } finally {if(submit.isConnected)submit.disabled=false;}
 }
@@ -293,7 +293,7 @@ async function logoutCloud() {
   for(const timer of cloudTimers.values())clearTimeout(timer);
   cloudTimers.clear();
   for(const id of Object.keys(cloudState))delete cloudState[id];
-  persist();closeCloudDialog();renderCloudButton();render();toast('로그아웃했습니다.');
+  persist();closeCloudDialog();renderCloudButton();if(route().view!=='edit-project')render();toast('로그아웃했습니다.');
 }
 async function uploadNoticeFile(t,file) {
   if(!cloudUser){toast('Supabase에 로그인해주세요.');return;}
@@ -391,7 +391,7 @@ function employeePickerMarkup(p) {
 }
 function projectFormPage(id) {
   const p=id==='new'?null:getProject(id),field=(name,label,value,type='text',required=true)=>`<div class="field"><label for="project-${name}">${label}</label><input id="project-${name}" name="${name}" type="${type}" value="${escapeHtml(value??'')}" ${required?'required':''}></div>`;
-  return `<a href="${p?`#project/${p.id}`:'#projects'}" class="back-link">${icon('back')} 프로젝트로 돌아가기</a>${heading(p?'프로젝트 수정':'프로젝트 등록','')}<form id="project-form" class="panel form-panel" data-project-id="${p?.id||'new'}"><section class="document-import"><h2>기획서에서 채우기</h2><p class="caption muted">텍스트 파일(.txt·.md)을 선택하거나 내용을 붙여넣으세요. 찾은 항목을 확인한 뒤 적용할 수 있어요.</p><div class="field"><label for="document-file">기획서 파일</label><input id="document-file" type="file" accept=".txt,.md,text/plain,text/markdown"></div><div class="field"><label for="document-source">또는 기획서 내용 붙여넣기</label><textarea id="document-source" class="short-textarea" placeholder="프로젝트 제목: ...&#10;담당자: ...&#10;신청 마감: 2026-10-12 18:00"></textarea></div><button type="button" class="button" data-action="extract-document">내용에서 항목 찾기</button><div id="document-candidates" aria-live="polite"></div></section><div class="form-grid">${field('name','프로젝트 제목',p?.name)}${field('owner','담당자 이름',p?.owner)}<div class="field full"><label for="project-description">프로젝트 설명</label><textarea id="project-description" name="description" class="short-textarea" required>${escapeHtml(p?.description||'')}</textarea></div>${field('start','신청 시작일',p?.start||'2026-10-05','date')}${field('deadlineAt','신청 마감 시각',p?.deadlineAt||'2026-10-12T18:00','datetime-local')}${field('event','행사·운영 일정',p?.event||'2026-10-20','date')}${field('applicationUrl','신청 링크',p?.applicationUrl||'','url',false)}<div class="field"><label for="project-confirmationMode">신청 후 확정 방식</label><select id="project-confirmationMode" name="confirmationMode"><option value="immediate" ${p?.confirmationMode!=='separate'?'selected':''}>신청 즉시 확정</option><option value="separate" ${p?.confirmationMode==='separate'?'selected':''}>별도 확인·승인·선정 후 확정</option></select></div><div class="field"><label for="project-type">종류</label><select id="project-type" name="type"><option value="행사" ${p?.type==='행사'?'selected':''}>행사</option><option value="복지" ${p?.type==='복지'?'selected':''}>복지</option><option value="이벤트" ${p?.type==='이벤트'?'selected':''}>이벤트</option></select></div><div class="field full">${employeePickerMarkup(p)}</div></div><p id="project-form-error" class="error-message" role="alert" ${projectFormError?'':'hidden'}>${escapeHtml(projectFormError)}</p><div class="actions"><button class="button primary" type="submit">${p?'변경 저장':'프로젝트 등록'}</button></div></form>`;
+  return `<a href="${p?`#project/${p.id}`:'#projects'}" class="back-link">${icon('back')} 프로젝트로 돌아가기</a>${heading(p?'프로젝트 수정':'프로젝트 등록','')}<form id="project-form" class="panel form-panel" data-project-id="${p?.id||'new'}"><section class="document-import" id="document-import"></section><div class="form-grid">${field('name','프로젝트 제목',p?.name)}${field('owner','담당자 이름',p?.owner)}<div class="field full"><label for="project-description">프로젝트 설명</label><textarea id="project-description" name="description" class="short-textarea" required>${escapeHtml(p?.description||'')}</textarea></div>${field('start','신청 시작일',p?.start||'','date')}${field('deadlineAt','신청 마감 시각',p?.deadlineAt||'','datetime-local')}${field('event','행사·운영 일정',p?.event||'','date')}${field('applicationUrl','신청 링크',p?.applicationUrl||'','url',false)}${field('location','장소',p?.location||'','text',false)}${field('audience','문서상 참여 대상',p?.audience||'','text',false)}${field('capacity','정원·선정 조건',p?.capacity||'','text',false)}<div class="field full"><label for="project-requirements">신청 방법·유의사항·행사 시간</label><textarea id="project-requirements" name="requirements" class="short-textarea">${escapeHtml(p?.requirements||'')}</textarea><p class="help">문서상 대상은 참고 정보입니다. 실제 대상 동료는 아래 명단에서 선택하세요.</p></div><div class="field"><label for="project-confirmationMode">신청 후 확정 방식</label><select id="project-confirmationMode" name="confirmationMode" required><option value="">확인 후 선택</option><option value="immediate" ${p?.confirmationMode==='immediate'?'selected':''}>신청 즉시 확정</option><option value="separate" ${p?.confirmationMode==='separate'?'selected':''}>별도 확인·승인·선정 후 확정</option></select></div><div class="field"><label for="project-type">종류</label><select id="project-type" name="type"><option value="행사" ${p?.type==='행사'?'selected':''}>행사</option><option value="복지" ${p?.type==='복지'?'selected':''}>복지</option><option value="이벤트" ${p?.type==='이벤트'?'selected':''}>이벤트</option></select></div><div class="field full">${employeePickerMarkup(p)}</div></div><p id="project-form-error" class="error-message" role="alert" ${projectFormError?'':'hidden'}>${escapeHtml(projectFormError)}</p><div class="actions"><button class="button primary" type="submit">${p?'변경 저장':'프로젝트 등록'}</button></div></form>`;
 }
 function refreshMemberPicker() {
   const search=$('#member-search')?.value.trim().toLowerCase()||'',team=$('#member-team')?.value||'all';
@@ -406,17 +406,6 @@ function refreshMemberPicker() {
   $('#member-visible-count').textContent=`검색 결과 ${visible}명`;
   $('#member-count').textContent=`대상 ${document.querySelectorAll('[data-target-member]:checked').length}명 · 필수 ${document.querySelectorAll('[data-required-member]:checked').length}명`;
 }
-const candidateLabels={name:'프로젝트 제목',owner:'담당자 이름',description:'프로젝트 설명',start:'신청 시작일',deadlineAt:'신청 마감 시각',event:'행사·운영 일정',applicationUrl:'신청 링크',confirmationMode:'신청 후 확정 방식',type:'종류'};
-function showDocumentCandidates() {
-  const box=$('#document-candidates');if(!box)return;
-  if(!documentCandidates.length){box.innerHTML='<p class="help">항목을 찾지 못했어요. “프로젝트 제목: …”처럼 항목 이름이 적힌 텍스트에서 후보를 찾을 수 있어요.</p>';return;}
-  box.innerHTML=`<h3>찾은 항목 ${documentCandidates.length}개</h3><p class="caption muted">적용할 항목을 선택하세요. 문서에 없는 값은 직접 확인해야 해요.</p>${documentCandidates.map((candidate,index)=>`<label class="candidate-row"><input type="checkbox" data-candidate="${index}" checked><span><strong>${candidateLabels[candidate.field]}: ${escapeHtml(candidate.value)}</strong><small>근거: ${escapeHtml(candidate.source)}</small></span></label>`).join('')}<button type="button" class="button" data-action="apply-document">선택한 항목 채우기</button>`;
-}
-function findDocumentCandidates() {
-  const text=$('#document-source').value;
-  documentCandidates=extractProjectCandidates(text);
-  showDocumentCandidates();
-}
 function saveProjectForm(event) {
   event.preventDefault();const form=event.target,id=form.dataset.projectId,old=id==='new'?null:getProject(id),data=new FormData(form);
   try {
@@ -428,7 +417,8 @@ function saveProjectForm(event) {
     const url=data.get('applicationUrl').trim();if(url && !/^https?:\/\//i.test(url))throw new Error('신청 링크는 http 또는 https 주소를 넣어주세요.');
     const name=data.get('name').trim(),owner=data.get('owner').trim(),description=data.get('description').trim();
     if(!name||!owner||!description)throw new Error('프로젝트 제목, 설명, 담당자 이름을 입력해주세요.');
-    const next={...(old||{}),id:old?.id||`local-${crypto.randomUUID()}`,name,short:name,type:data.get('type'),symbol:old?.symbol||'folder',description,owner,start,deadlineAt,deadline:deadlineAt.slice(0,10),event:eventDate,eventLabel:old?.eventLabel||'운영 일정',applicationUrl:url,confirmationMode:data.get('confirmationMode'),targetIds,requiredIds,dataKind:'local',lastCheckedAt:old?.lastCheckedAt||null,reference:appliedDocumentName||old?.reference||'직접 입력'};
+    const sourceReviews = Object.values({...Object.fromEntries((old?.sourceReviews||[]).map(row=>[row.field,row])),...appliedFieldReviews}).map(row=>({...row,manuallyEdited:row.manuallyEdited||String(data.get(row.field)||'')!==row.appliedValue,appliedValue:String(data.get(row.field)||'')}));
+    const next={...(old||{}),sourceReviews,location:String(data.get('location')||''),audience:String(data.get('audience')||''),capacity:String(data.get('capacity')||''),requirements:String(data.get('requirements')||''),id:old?.id||`local-${crypto.randomUUID()}`,name,short:name,type:data.get('type'),symbol:old?.symbol||'folder',description,owner,start,deadlineAt,deadline:deadlineAt.slice(0,10),event:eventDate,eventLabel:old?.eventLabel||'운영 일정',applicationUrl:url,confirmationMode:data.get('confirmationMode'),targetIds,requiredIds,dataKind:'local',lastCheckedAt:old?.lastCheckedAt||null,reference:appliedDocumentName||old?.reference||'직접 입력'};
     if(old){PROJECTS=PROJECTS.map(p=>p.id===id?next:p);if(old.confirmationMode!==next.confirmationMode){applications=applications.map(r=>r.projectId===id&&r.status!=='cancelled'?{...r,status:next.confirmationMode==='immediate'?'confirmed':'applied'}:r);}}
     else PROJECTS.push(next);
     if(old)TICKETS.filter(t=>t.project===id).forEach(t=>{if(drafts[t.id])drafts[t.id].confirmed=false;});
@@ -511,9 +501,18 @@ function filterRecipientRows() {
   const search=recipientSearch.trim().toLowerCase();document.querySelectorAll('[data-individual-row]').forEach(row=>row.hidden=Boolean(search)&&!row.dataset.search.includes(search));
 }
 function render() {
+  disposeDocumentImport?.();disposeDocumentImport=null;
   const r=route();renderNavigation(r);
   $('#content').innerHTML=r.view==='home'?home():r.view==='projects'?projectsPage():r.view==='project'?projectPage(r.id):r.view==='edit-project'?projectFormPage(r.id):r.view==='history'?historyPage():reviewPage(r.id);
-  if(r.view==='edit-project')refreshMemberPicker();
+  if(r.view==='edit-project'){
+    refreshMemberPicker();
+    disposeDocumentImport=mountDocumentImport($('#document-import'),{
+      loggedIn:()=>Boolean(cloudUser),login:openCloudDialog,
+      getValue:field=>$(`#project-${field}`)?.value||'',
+      saved:getProject(r.id)?.sourceReviews||[],
+      apply:rows=>{for(const row of rows){const input=$(`#project-${row.field}`);if(input){input.value=row.appliedValue;appliedFieldReviews[row.field]=row;}}appliedDocumentName=[...new Set(rows.flatMap(row=>row.evidence.map(e=>e.sourceName)))].join(' · ');toast(`${rows.length}개 항목을 채웠어요. 확인 후 저장해주세요.`);},
+    });
+  }
   if(r.view==='review'){const all=$('#all-teams');if(all)all.indeterminate=getDraft(getTicket(r.id)).teams.length>0&&getDraft(getTicket(r.id)).teams.length<TEAMS.length;filterRecipientRows();}
 }
 function refreshCalendar() {
@@ -688,13 +687,6 @@ document.addEventListener('click',event=>{
     }break;
     case 'select-visible-members':document.querySelectorAll('[data-member-row]:not([hidden]) [data-target-member]').forEach(input=>input.checked=true);refreshMemberPicker();break;
     case 'clear-visible-members':document.querySelectorAll('[data-member-row]:not([hidden]) [data-target-member]').forEach(input=>input.checked=false);refreshMemberPicker();break;
-    case 'extract-document':findDocumentCandidates();break;
-    case 'apply-document':{
-      const selected=[...document.querySelectorAll('[data-candidate]:checked')].map(input=>documentCandidates[Number(input.dataset.candidate)]);
-      selected.forEach(candidate=>{const input=$(`#project-${candidate.field}`);if(input)input.value=candidate.value;});
-      if(selected.length){appliedDocumentName=documentName||'붙여넣은 기획서';toast(`${selected.length}개 항목을 채웠어요. 내용을 확인하고 저장해주세요.`);}
-      break;
-    }
     case 'reset-sample':if(!resetArmed){resetArmed=true;render();break;}resetArmed=false;PROJECTS=structuredClone(INITIAL_PROJECTS);applications=structuredClone(INITIAL_APPLICATIONS);applicationEvents=[];records=structuredClone(INITIAL_RECORDS);completed={};drafts={};calendar={year:2026,month:9,selected:'2026-10-03',view:'calendar'};persist();render();toast('예시 데이터로 초기화했어요.');break;
     case 'calendar-today':calendar={year:2026,month:9,selected:'2026-10-03',view:'calendar'};refreshCalendar();break;
     case 'new-record':newHistory(button.dataset.project);break;
@@ -714,11 +706,6 @@ document.addEventListener('change',async event=>{
   const r=route(),el=event.target;
   if(el.id==='preview-ack'){$('[data-action="confirm-preview"]').disabled=!el.checked;return;}
   if(r.view==='edit-project'){
-    if(el.id==='document-file'){
-      const file=el.files?.[0];if(!file)return;
-      if(!/\.(txt|md)$/i.test(file.name)||file.size>2_000_000){$('#document-candidates').innerHTML='<p class="error-message">2MB 이하의 .txt 또는 .md 파일을 선택해주세요.</p>';return;}
-      documentName=file.name;$('#document-source').value=await file.text();findDocumentCandidates();return;
-    }
     if(el.id==='member-team'||el.matches('[data-target-member], [data-required-member]'))refreshMemberPicker();
     return;
   }
@@ -735,7 +722,6 @@ document.addEventListener('change',async event=>{
 document.addEventListener('input',event=>{
   if(event.target.id==='member-search'){refreshMemberPicker();return;}
   if(event.target.id==='recipient-search'){recipientSearch=event.target.value;filterRecipientRows();return;}
-  if(event.target.id==='document-source'){documentName='';return;}
   if(event.target.id==='draft-body'){const r=route();if(r.view!=='review')return;const t=getTicket(r.id),d=getDraft(t);d.body=event.target.value;d.confirmed=false;updateApproval(t);}
 });
 document.addEventListener('submit',event=>{if(event.target.id==='cloud-login-form')loginCloud(event);if(event.target.id==='history-form')saveHistoryForm(event);if(event.target.id==='new-history-form')saveNewHistoryForm(event);if(event.target.id==='project-form')saveProjectForm(event);if(event.target.id==='cancel-form')saveCancelForm(event);});
@@ -755,7 +741,7 @@ window.addEventListener('hashchange',()=>{
     if(previousDraft){previousDraft.confirmed=false;previousDraft.confirmedSignature='';}
   }
   previousRoute=route();
-  if($('#history-dialog').open)closeHistory();if($('#cancel-dialog').open)closeCancel();if($('#send-preview-dialog').open)closeSendPreview();activeTab='tickets';recipientPage=0;recipientSearch='';resetArmed=false;projectFormError='';documentCandidates=[];documentName='';appliedDocumentName='';
+  if($('#history-dialog').open)closeHistory();if($('#cancel-dialog').open)closeCancel();if($('#send-preview-dialog').open)closeSendPreview();activeTab='tickets';recipientPage=0;recipientSearch='';resetArmed=false;projectFormError='';appliedDocumentName='';appliedFieldReviews={};
   render();window.scrollTo({top:0,behavior:'instant'});$('#content').focus({preventScroll:true});
 });
 window.addEventListener('focus',()=>{const r=route();if(r.view==='review')refreshCloudDraft(getTicket(r.id));});

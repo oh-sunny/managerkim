@@ -81,3 +81,31 @@ test('authenticated file upload stores bytes privately and records its hash',asy
   assert.equal(Buffer.from(storage.options.body).toString(),'hello');
   assert.match(calls.find(item=>item.url.endsWith('/rest/v1/notice_resources')).options.body,/2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824/);
 });
+
+test('document analysis is authenticated, same-origin, size-limited and passes no credentials to the model',async()=>{
+  let analyzed=0;
+  const analyzer={configured:true,analyze:async input=>{analyzed++;assert.deepEqual(input,{files:[],text:'행사명: 샘플',forceOcr:false});return {fields:[],sources:[]};}};
+  const handler=createSupabaseApi({...config,analyzer,fetcher:async()=>response({id:'user-1'})});
+  const body={files:[],text:'행사명: 샘플',forceOcr:false};
+  const headers={...cookie,'content-type':'application/json',origin:'http://localhost:3100'};
+  assert.equal((await call(handler,'/api/documents/analyze',{method:'POST',body})).status,401);
+  assert.equal((await call(handler,'/api/documents/analyze',{method:'POST',body,headers:{...headers,origin:'https://other.example'}})).status,403);
+  assert.equal((await call(handler,'/api/documents/analyze',{method:'POST',body,headers})).status,200);
+  assert.equal(analyzed,1);
+  assert.equal((await call(handler,'/api/documents/analyze',{method:'POST',body:'a'.repeat(4_100_001),headers})).status,413);
+  assert.equal(analyzed,1);
+});
+
+test('concurrent analysis from the same user is rejected and provider failure is safe',async()=>{
+  let release;
+  const wait=new Promise(resolve=>{release=resolve;});
+  const analyzer={configured:true,analyze:async()=>{await wait;throw Object.assign(new Error('private-api-key'),{status:402,publicMessage:'크레딧 확인 필요'});}};
+  const handler=createSupabaseApi({...config,analyzer,fetcher:async()=>response({id:'user-1'})});
+  const options={method:'POST',body:{},headers:{...cookie,'content-type':'application/json'}};
+  const first=call(handler,'/api/documents/analyze',options);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal((await call(handler,'/api/documents/analyze',options)).status,429);
+  release();
+  const result=await first;
+  assert.equal(result.status,402);assert.equal(result.body.error,'크레딧 확인 필요');
+});

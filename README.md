@@ -12,13 +12,14 @@ HTML·CSS·JavaScript와 Node.js 정적 서버로 실행합니다. 현재 가능
 - 안내 초안 수정, 팀별 DM 대상 또는 채널 선택, 모의 발송
 - 보내기 전 초안·대상 선택의 브라우저 저장·복원. 발송 확인 체크는 복원하지 않음
 - 안내 원문·Slack 링크 기록과 브라우저 저장·복원
-- `.txt`·`.md` 기획서 또는 붙여넣은 텍스트에서 명시적 항목 후보를 찾아 검토 후 적용
+- 여러 PDF·DOCX·TXT·MD와 붙여넣은 내용을 Gemma로 함께 분석하고 핵심 정보·출처·누락·충돌을 검토 후 적용
+- 스캔 PDF 자동 OCR과 PDF 전체 이미지 읽기, 적용한 정보의 근거·시각을 프로젝트와 함께 로컬 저장
 
-동료 명단과 화면의 기존 티켓은 예시 데이터이며, 티켓·캘린더의 예시 기준일은 2026년 10월 3일입니다. 별도 모듈에 규칙 기반 티켓 평가기와 Google Sheets 이력 조회·정규화 기능을 구현했지만, 화면과 실제 시트 인증에는 아직 연결하지 않았습니다. Slack 연결, 프로젝트·발송 이력의 서버 저장·주기 실행, PDF·Word·AI 문서 해석도 남아 있습니다. 메시지는 실제로 보내지 않습니다.
+동료 명단과 화면의 기존 티켓은 예시 데이터이며, 티켓·캘린더의 예시 기준일은 2026년 10월 3일입니다. 별도 모듈에 규칙 기반 티켓 평가기와 Google Sheets 이력 조회·정규화 기능을 구현했지만, 화면과 실제 시트 인증에는 아직 연결하지 않았습니다. Slack 연결, 프로젝트·발송 이력의 서버 저장·주기 실행, AI 공지 초안 생성은 남아 있습니다. 메시지는 실제로 보내지 않습니다.
 
 ## 로컬 실행
 
-Node.js 20 이상이 필요합니다. 추가 패키지 설치 없이, 이 README와 `package.json`이 있는 저장소 루트에서 실행합니다.
+Node.js 22.13 이상이 필요합니다. 이 README와 `package.json`이 있는 저장소 루트에서 `npm ci`로 의존성을 설치한 뒤 실행합니다.
 
 ```powershell
 npm run dev
@@ -43,13 +44,23 @@ npm run dev
 
 로그인 후 안내 초안의 본문·대상 선택·링크는 `notice_drafts`에 자동 저장되며 저장 상태와 버전 충돌을 화면에 표시합니다. 첨부 파일은 비공개 `notice-files` 버킷과 `notice_resources`에 저장됩니다. 모의 발송 시 선택한 자료 정보는 브라우저의 보낸 안내 기록에 남습니다. 실제 Slack 파일 전송, 서버 발송 기록, 프로젝트·신청 상태의 서버 저장은 후속 작업입니다.
 
+## Gemma 연결 확인
+
+`npm install` 후 `.env`에 `GEMINI_API_KEY`와 `GEMMA_MODEL`을 설정하고 `npm run test:gemma`를 실행합니다. 이 명령은 가상 자료로 연결만 점검하며, 가상 문서 두 개만 Google API에 전달합니다. 기존 `npm test`에는 외부 API 호출이 포함되지 않습니다. 키는 출력하지 않습니다.
+
+웹사이트에서는 **프로젝트 등록·수정 → 자료 추가 → 자료 분석하기 → 후보 선택·수정 → 선택한 정보 적용 → 프로젝트 저장** 순서로 사용합니다. Supabase 운영자 로그인이 필요하며 키는 서버에서만 사용합니다. 파일 6개, 개별 2MB·전체 2.8MB, PDF 파일당 30쪽, OCR 전체 8쪽, 추출 텍스트 8만 자까지 지원합니다. TXT·MD는 UTF-8입니다.
+
+텍스트가 적거나 깨진 PDF 페이지는 Gemma 이미지 입력으로 OCR합니다. 텍스트와 이미지가 섞인 PDF는 ‘PDF 전체를 이미지로 읽기’를 선택할 수 있습니다. OCR 페이지·판독 불가 항목은 원본과 대조해야 합니다. DOCX는 본문·표·머리말·꼬리말·주석이 아닌 각주/미주의 텍스트를 읽으며, 삽입 이미지는 OCR하지 않습니다.
+
+분석할 자료의 본문과 OCR 대상 이미지는 Google로 전송됩니다. 원본 파일과 전체 분석은 서버·DB에 저장하지 않습니다. 적용한 값과 근거·파일 해시·분석/적용 시각만 프로젝트와 함께 이 브라우저에 저장합니다. 선택한 파일과 아직 적용하지 않은 분석 결과는 화면 이동·새로고침으로 사라집니다. 실제 파일의 종합 품질 검증과 AI 공지 초안 생성은 별도 작업입니다.
+
 ## Vercel 배포
 
 이 저장소는 [`vercel.json`](vercel.json)에서 정적 화면을 `prototype/`에서 제공하고, `/api/*` 요청을 [`api/index.js`](api/index.js) 함수로 연결합니다. 로컬 Node 서버를 Vercel에서 실행하지 않습니다.
 
 1. 이 저장소의 배포할 변경을 Git에 커밋하고 GitHub `main`에 푸시합니다. 로컬 `.env`는 Git에 포함하지 않습니다.
 2. Vercel에서 **Add New → Project**로 GitHub 저장소를 가져옵니다. Root Directory는 저장소 루트로 둡니다. `vercel.json`의 **Framework Preset: Other**, **Output Directory: prototype** 설정을 사용하고 별도 Build Command는 지정하지 않습니다.
-3. Supabase를 사용할 경우 Vercel 프로젝트의 **Settings → Environment Variables**에 `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`를 Preview와 Production 환경용으로 입력합니다. 운영자 Auth 계정으로 로그인할 수 있어야 합니다. 환경 변수 변경 후 새 배포를 생성합니다.
+3. Supabase를 사용할 경우 Vercel 프로젝트의 **Settings → Environment Variables**에 `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`를 Preview와 Production 환경용으로 입력합니다. 운영자 Auth 계정으로 로그인할 수 있어야 합니다. Gemma 분석에는 `GEMINI_API_KEY`와 `GEMMA_MODEL`도 서버 환경 변수로 설정합니다. Node.js는 22.13 이상(권장 24)으로 실행하며 환경 변수 변경 후 새 배포를 생성합니다.
 4. Preview 배포에서 화면과 `/api/status`를 확인합니다. Supabase 설정을 했다면 `{ "configured": true }`가 나와야 합니다. 로그인, 초안 저장, 파일 업로드도 확인한 뒤 Production에 배포합니다.
 
 Vercel 함수의 요청·응답 크기 제한에 맞춰 첨부 파일은 4MB 이하입니다. 프로젝트·신청 상태·보낸 기록은 브라우저 `localStorage`에 남으므로 기기 간 공유되지 않습니다. 현재 화면 전체에 운영자 로그인 장벽은 없으므로 실제 사내 자료를 넣기 전에 사이트 접근 범위를 설정해야 합니다.
@@ -63,42 +74,98 @@ Vercel 함수의 요청·응답 크기 제한에 맞춰 첨부 파일은 4MB 이
 - [공개 업무 조사](docs/research_001.md): 공개 사례·출처와 조사 당시의 제품 제안
 - [데이터 흐름과 저장 구조](docs/data-architecture.md): 파일·텍스트 입력, 분석 후보, 확정 정보, 공지 초안과 신청/안내 이력을 Supabase·API에 연결하는 설계 초안
 - [공지 초안 톤 가이드](docs/references/tone-guide.md): 말투 작성 기준과 [공개 레퍼런스](docs/references/daangn-tone-references.csv). 현재 앱에서 읽는 데이터가 아닌 작성 참고 자료입니다.
-- [이전 와이어프레임](docs/archive/source.html): 초기 화면 흐름 보관 자료. 현재 실행 화면은 `prototype/`에 있습니다.
+- [테스트 구성과 평가 방법](tests/README.md): 자동 테스트, 가상 사례 자료, 문서 생성·공지 평가 도구
 
 ## 저장소 구성
 
+화면을 수정할 때는 `prototype/`, 서버 API는 `scripts/supabase-api.mjs`, 다음 구현 작업은 `docs/PLAN.md`부터 확인합니다. 아래 `#` 뒤는 각 경로의 역할을 설명하는 주석입니다.
+
 ```text
 저장소 루트/
-├─ .gitignore
-├─ .gitattributes
-├─ README.md
-├─ package.json
-├─ docs/
-│  ├─ PRD.md
-│  ├─ PLAN.md
-│  ├─ data-architecture.md
-│  ├─ research_001.md
-│  ├─ references/
-│  │  ├─ tone-guide.md
-│  │  └─ daangn-tone-references.csv
-│  └─ archive/
-│     └─ source.html
-├─ spec/
-│  ├─ spec_001.md
-│  └─ spec_002.md
-├─ prototype/
-│  ├─ index.html
-│  ├─ styles.css
-│  ├─ data.js
-│  ├─ document-extract.js
-│  ├─ message-templates.js
-│  └─ app.js
-├─ tests/
-│  ├─ data.test.js
-│  ├─ document-extract.test.js
-│  └─ message-templates.test.js
-└─ scripts/
-   └─ dev-server.mjs
+├─ README.md                        # 실행 방법과 폴더 구조의 시작점
+├─ package.json                     # 실행 명령과 직접 사용하는 npm 패키지 목록
+├─ package-lock.json                # 설치 버전 고정; node_modules와 달리 보관할 파일
+├─ vercel.json                      # Vercel 정적 화면 경로와 API 라우팅
+├─ .env                             # 로컬 연결 설정·키; Git 제외
+├─ .env.example                     # 필요한 환경 변수의 예시; 실제 키 없음
+├─ .gitignore                       # 비밀 설정·설치물·임시 자료의 Git 제외 규칙
+├─ .gitattributes                   # Git 파일 처리 규칙
+│
+├─ prototype/                       # 현재 실행·배포하는 프런트엔드
+│  ├─ index.html                    # 화면 진입점; app.js와 styles.css 로드
+│  ├─ app.js                        # 화면·예시 데이터·상태 저장·API 호출 연결
+│  ├─ styles.css                    # 화면 스타일
+│  ├─ data.js                       # 신청 인원·대상 계산과 티켓 정렬
+│  ├─ document-extract.js           # TXT·MD 텍스트에서 운영 정보 후보 추출
+│  ├─ analysis-contract.js          # 자료 분석의 필드·용량 제한·값 검증 규칙
+│  ├─ document-import.js            # 자료 분석 결과를 등록 화면에 연결
+│  ├─ message-templates.js          # 공지 초안 템플릿
+│  └─ rule-engine.js                # 규칙 기반 티켓 평가; 테스트에서 사용, 화면 미연결
+│
+├─ api/                             # Vercel 서버 함수 진입점
+│  └─ index.js                      # 요청을 scripts/supabase-api.mjs로 전달
+├─ scripts/                         # 로컬 실행 도구와 서버 모듈이 함께 있는 폴더
+│  ├─ dev-server.mjs                # npm run dev; 정적 파일과 /api 요청 처리
+│  ├─ supabase-api.mjs              # 로컬·Vercel 공용 로그인·초안·자료 저장 API
+│  ├─ document-reader.mjs           # PDF·DOCX·텍스트 자료 읽기
+│  ├─ document-analysis.mjs         # 자료 분석 요청과 AI 결과 처리
+│  ├─ application-source.mjs        # 대상 명단·신청 이력 정규화; 화면 미연결
+│  ├─ google-sheets-source.mjs      # Google Sheets 읽기 어댑터; 실제 인증·화면 미연결
+│  └─ gemma-smoke.mjs               # npm run test:gemma; 가상 자료로 외부 API 연결 확인
+├─ supabase/
+│  └─ migrations/                  # DB 테이블·접근 정책·저장소 변경 이력
+│     └─ 20261006015431_notice_drafts_and_resources.sql
+│
+├─ tests/                           # 자동 테스트·입력 자료·평가 도구를 한곳에 보관
+│  ├─ README.md                     # 테스트 구조·자료 재생성 방법·평가 기준
+│  ├─ data.test.js                  # 신청 현황 계산·정렬
+│  ├─ document-extract.test.js      # 텍스트 후보 추출
+│  ├─ document-analysis.test.js     # 문서 읽기·분석 결과와 근거 검증
+│  ├─ message-templates.test.js     # 공지 템플릿
+│  ├─ rule-engine.test.js           # 규칙 기반 티켓 평가
+│  ├─ application-source.test.js    # 신청 원본 정규화·시트 어댑터
+│  ├─ source-rule-integration.test.js # 신청 원본과 티켓 평가의 연결
+│  ├─ supabase-api.test.js          # Supabase API 처리
+│  ├─ fixtures.test.js              # 자료 무결성·사례별 기능 검증; npm test에 포함
+│  ├─ fixtures/                    # 테스트 입력과 기대 결과
+│  │  ├─ documents/                # PDF 6개·DOCX 6개; 테스트 입력 자료
+│  │  ├─ source_text/              # 문서 원문 TXT 12개; 추출 검증·정답 대조
+│  │  └─ data/                     # 직원·프로젝트·신청·기대 결과 등 JSON 8개
+│  └─ tools/                       # 자료 생성·공지 평가 도구
+│     ├─ build_fixtures.py          # fixtures/ 아래 문서·텍스트·기본 JSON 생성
+│     ├─ notice-contract.mjs        # 공지의 링크·마감·오래된 정보 검사 규칙
+│     └─ evaluate-notice.mjs        # 새 공지 JSON을 검사하는 CLI
+│
+├─ docs/                            # 기획·설계·조사·참고 자료
+│  ├─ PRD.md                        # 제품 목표와 요구사항
+│  ├─ PLAN.md                       # 구현 순서와 진행 상태
+│  ├─ data-architecture.md          # 데이터 흐름과 서버 저장 설계 초안
+│  ├─ research_001.md               # 공개 사례 조사
+│  └─ references/                  # 공지 작성 참고 자료; 앱 실행 시 읽지 않음
+│     ├─ tone-guide.md              # 말투 기준
+│     └─ daangn-tone-references.csv  # 공개 문구와 출처
+├─ spec/                            # 기능별 상세 명세
+│  ├─ spec_001.md                   # 현재 구현 동작과 한계
+│  └─ spec_002.md                   # 기획서 입력·대상 선택·자료·초안 추가 요구사항
+│
+├─ node_modules/                    # npm 설치 결과; Git 제외, 재설치 가능
+└─ .git/                            # Git 이력과 저장소 정보
 ```
 
-`.local-preview/`는 로컬 확인 자료를 보관하며 Git 업로드 대상에서 제외합니다.
+### 실행 경로와 헷갈리기 쉬운 구분
+
+- **로컬 실행:** `npm run dev` → `scripts/dev-server.mjs` → `prototype/` 화면 제공. `/api/*`는 `scripts/supabase-api.mjs`가 처리합니다.
+- **Vercel 실행:** `vercel.json` → `prototype/` 화면 제공. `/api/*`는 `api/index.js`를 거쳐 같은 `scripts/supabase-api.mjs`를 사용합니다. 두 서버 진입점은 실행 환경이 달라 필요합니다.
+- **자동 테스트:** `npm test`로 `tests/` 아래 자동 테스트를 실행합니다. `fixtures.test.js`는 `fixtures/`의 입력·기대 결과와 `tools/notice-contract.mjs`를 사용합니다. `fixtures/documents/`와 `fixtures/source_text/`는 각각 파일 입력과 원문 대조에 필요합니다.
+- **자료 생성·공지 평가:** `python tests/tools/build_fixtures.py`로 자료를 생성하고, `node tests/tools/evaluate-notice.mjs candidate.json`으로 새 공지의 사실 관계를 검사합니다. 환경 요건과 자료 범위는 [테스트 README](tests/README.md)를 참고합니다.
+- **아직 화면에 연결하지 않은 코드:** `rule-engine.js`, `application-source.mjs`, `google-sheets-source.mjs`는 테스트에서 참조합니다. 현재 화면에서 사용하지 않는다는 이유로 삭제하면 테스트와 후속 연동 작업에 영향을 줍니다.
+
+### 정리 후보
+
+`node_modules/`는 재생성 가능한 설치물입니다. 공간이 필요할 때 삭제 후 `npm ci`로 복원할 수 있지만, 앱·문서 처리·Gemma 연결 확인에 사용하는 패키지가 들어 있으므로 일반 작업 중에는 유지합니다. `package.json`과 `package-lock.json`도 함께 유지합니다.
+
+`pdfjs-dist`와 `yauzl`은 현재 `scripts/document-reader.mjs`에서 사용하므로 미사용 패키지로 분류하지 않습니다. 의존성 정리는 현재 코드의 참조를 기준으로 판단합니다.
+
+`tests/`, `supabase/migrations/`, `.env`, `.git/`는 테스트와 입력 자료, DB 재구성 이력, 로컬 연결 설정, 버전 이력을 각각 보관합니다.
+
+추가로 구조를 정리한다면 `scripts/`의 서버 모듈을 `server/`로 분리하고, `spec/`을 `docs/spec/`으로 합칠 수 있습니다. 실제 이동 시 import·문서 링크와 로컬·Vercel 실행 경로를 함께 수정해야 합니다.

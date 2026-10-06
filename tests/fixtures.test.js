@@ -6,9 +6,9 @@ import {fileURLToPath} from 'node:url';
 import {calculateStatus, applicationBreakdown, setApplication} from '../prototype/data.js';
 import {extractProjectCandidates} from '../prototype/document-extract.js';
 import {buildDraftMessage} from '../prototype/message-templates.js';
-import {evaluateNotice} from './notice-contract.mjs';
+import {evaluateNotice} from './tools/notice-contract.mjs';
 
-const root = fileURLToPath(new URL('.', import.meta.url));
+const root = fileURLToPath(new URL('./fixtures/', import.meta.url));
 const json = name => JSON.parse(readFileSync(join(root, 'data', name), 'utf8'));
 const cases = json('cases.json');
 const documents = json('documents.json');

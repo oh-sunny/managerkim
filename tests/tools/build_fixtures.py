@@ -22,7 +22,8 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether
 
 
-ROOT = Path(__file__).resolve().parent
+# 생성 자료는 tests/fixtures 아래에 모으고 실행 도구와 분리한다.
+ROOT = Path(__file__).resolve().parent.parent / "fixtures"
 DOC_DIR = ROOT / "documents"
 TEXT_DIR = ROOT / "source_text"
 DATA_DIR = ROOT / "data"
