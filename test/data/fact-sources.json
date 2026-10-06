@@ -1,0 +1,30 @@
+{
+  "health-2026": {
+    "target": ["health-policy"],
+    "deadlineAt": ["health-policy", "health-update"],
+    "eventDate": ["health-policy", "health-update"],
+    "applicationUrl": ["health-booking"],
+    "confirmationMode": ["health-policy", "health-booking"]
+  },
+  "learning-2026q4": {
+    "target": ["learning-policy"],
+    "deadlineAt": ["learning-policy", "learning-faq"],
+    "eventDate": ["learning-policy"],
+    "applicationUrl": ["learning-review"],
+    "confirmationMode": ["learning-review", "learning-faq"]
+  },
+  "workshop-2026": {
+    "target": ["workshop-plan"],
+    "deadlineAt": ["workshop-rsvp-update"],
+    "eventDate": ["workshop-plan", "workshop-logistics"],
+    "applicationUrl": ["workshop-rsvp-update"],
+    "confirmationMode": ["workshop-plan", "workshop-rsvp-update"]
+  },
+  "photo-2026": {
+    "target": ["photo-plan"],
+    "deadlineAt": ["photo-plan"],
+    "eventDate": ["photo-plan", "photo-rights"],
+    "applicationUrl": ["photo-submit"],
+    "confirmationMode": ["photo-submit"]
+  }
+}

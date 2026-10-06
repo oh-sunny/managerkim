@@ -1,0 +1,186 @@
+import { createHash, randomUUID } from 'node:crypto';
+
+const MIME = {pdf:'application/pdf',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',txt:'text/plain',md:'text/markdown',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg'};
+const MAX_JSON = 120_000;
+const MAX_FILE = 4_000_000;
+const draftIdOk = id => /^[a-z0-9-]{1,100}$/i.test(id);
+const json = (res,status,value) => {
+  const body=Buffer.from(JSON.stringify(value));
+  res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Content-Length':body.length,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
+  res.end(body);
+};
+const cookie = (req,name) => {
+  const part=String(req.headers.cookie||'').split(';').map(item=>item.trim()).find(item=>item.startsWith(`${name}=`));
+  try{return part?decodeURIComponent(part.slice(name.length+1)):'';}catch{return '';}
+};
+const secureCookie = process.env.VERCEL ? '; Secure' : '';
+const setCookies = (res,session) => {
+  const maxAge=Math.max(1,Math.min(Number(session.expires_in)||3600,3600));
+  res.setHeader('Set-Cookie',[
+    `sb_access=${encodeURIComponent(session.access_token)}; HttpOnly; SameSite=Strict; Path=/api; Max-Age=${maxAge}${secureCookie}`,
+    `sb_refresh=${encodeURIComponent(session.refresh_token)}; HttpOnly; SameSite=Strict; Path=/api; Max-Age=2592000${secureCookie}`,
+  ]);
+};
+const clearCookies = res => res.setHeader('Set-Cookie',[
+  `sb_access=; HttpOnly; SameSite=Strict; Path=/api; Max-Age=0${secureCookie}`,
+  `sb_refresh=; HttpOnly; SameSite=Strict; Path=/api; Max-Age=0${secureCookie}`,
+]);
+async function bytes(req,max) {
+  if (req.body !== undefined) {
+    const body = Buffer.isBuffer(req.body) ? req.body
+      : typeof req.body === 'string' ? Buffer.from(req.body)
+      : req.body instanceof Uint8Array ? Buffer.from(req.body)
+      : Buffer.from(JSON.stringify(req.body));
+    if (body.length > max) throw Object.assign(new Error('요청 크기 제한을 넘었습니다.'), { status: 413 });
+    return body;
+  }
+  let length=0;const chunks=[];
+  for await(const chunk of req){length+=chunk.length;if(length>max)throw Object.assign(new Error('요청 크기 제한을 넘었습니다.'),{status:413});chunks.push(chunk);}
+  return Buffer.concat(chunks);
+}
+const validDraft = data => data && typeof data==='object' && !Array.isArray(data) &&
+  typeof data.body==='string' && data.body.length<=20000 &&
+  ['friendly','concise','action'].includes(data.tone) && ['dm','channel'].includes(data.mode) &&
+  ['pending','project','company'].includes(data.scope) && ['team','people'].includes(data.dmSelection) &&
+  Array.isArray(data.teams) && data.teams.length<=20 && data.teams.every(item=>typeof item==='string') &&
+  Array.isArray(data.selectedIds) && data.selectedIds.length<=160 && data.selectedIds.every(Number.isInteger) &&
+  Array.isArray(data.channels) && data.channels.length<=20 && data.channels.every(item=>typeof item==='string') &&
+  (!data.resources || Array.isArray(data.resources) && data.resources.length<=20);
+
+export function createSupabaseApi({url='',key='',fetcher=fetch}={}) {
+  let base='';
+  try {const parsed=new URL(url);if(parsed.protocol==='https:'||parsed.protocol==='http:'&&['localhost','127.0.0.1'].includes(parsed.hostname))base=parsed.origin;} catch {}
+  const configured=Boolean(base && key && !key.includes('your_key'));
+  const upstream=async(path,options={},token='')=>{
+    const headers={apikey:key,...options.headers};
+    if(token)headers.Authorization=`Bearer ${token}`;
+    return fetcher(`${base}${path}`,{...options,headers,signal:AbortSignal.timeout(15000)});
+  };
+  const readUpstream=async response=>{
+    const contentType=response.headers.get('content-type')||'';
+    const raw=await response.text();
+    return contentType.includes('json')&&raw?JSON.parse(raw):raw;
+  };
+  async function authenticated(req,res) {
+    let token=cookie(req,'sb_access');
+    if(token){
+      const response=await upstream('/auth/v1/user',{},token);
+      if(response.ok)return {token,user:await readUpstream(response)};
+    }
+    const refresh=cookie(req,'sb_refresh');
+    if(refresh){
+      const response=await upstream('/auth/v1/token?grant_type=refresh_token',{
+        method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({refresh_token:refresh}),
+      });
+      if(response.ok){
+        const session=await readUpstream(response);setCookies(res,session);token=session.access_token;
+        const userResponse=await upstream('/auth/v1/user',{},token);
+        if(userResponse.ok)return {token,user:await readUpstream(userResponse)};
+      }
+    }
+    clearCookies(res);return null;
+  }
+  const currentDraft=async(id,token)=>{
+    const response=await upstream(`/rest/v1/notice_drafts?id=eq.${encodeURIComponent(id)}&select=id,payload,version,updated_at&limit=1`,{},token);
+    if(!response.ok)throw new Error(`Supabase 초안 조회 실패 (${response.status})`);
+    return (await readUpstream(response))[0]||null;
+  };
+
+  return async function handleApi(req,res,pathname) {
+    try {
+      if(pathname==='/api/status' && req.method==='GET'){json(res,200,{configured});return;}
+      if(!configured){json(res,503,{error:'서버 환경 변수 SUPABASE_URL과 SUPABASE_PUBLISHABLE_KEY를 설정해주세요.'});return;}
+      if(req.method!=='GET' && req.method!=='HEAD'){
+        const origin=req.headers.origin;
+        const hostname=String(req.headers.host||'');
+        const allowedOrigins=new Set([`https://${hostname}`]);
+        if (/^(localhost|127\.0\.0\.1)(:\d+)?$/.test(hostname)) allowedOrigins.add(`http://${hostname}`);
+        if(origin && !allowedOrigins.has(origin)){json(res,403,{error:'다른 출처의 요청은 허용되지 않습니다.'});return;}
+      }
+      if(pathname==='/api/auth/login' && req.method==='POST'){
+        const input=JSON.parse((await bytes(req,3000)).toString('utf8'));
+        if(typeof input.email!=='string'||typeof input.password!=='string'||input.email.length>254||input.password.length>500){json(res,400,{error:'이메일과 비밀번호를 확인해주세요.'});return;}
+        const response=await upstream('/auth/v1/token?grant_type=password',{
+          method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:input.email,password:input.password}),
+        });
+        if(!response.ok){json(res,401,{error:'로그인에 실패했습니다. 계정과 비밀번호를 확인해주세요.'});return;}
+        const session=await readUpstream(response);setCookies(res,session);
+        json(res,200,{user:{id:session.user?.id,email:session.user?.email}});return;
+      }
+      if(pathname==='/api/auth/logout' && req.method==='POST'){
+        const token=cookie(req,'sb_access');
+        if(token)await upstream('/auth/v1/logout',{method:'POST'},token).catch(()=>{});
+        clearCookies(res);json(res,200,{signedOut:true});return;
+      }
+      const auth=await authenticated(req,res);
+      if(!auth){json(res,401,{error:'Supabase 계정으로 로그인해주세요.'});return;}
+      if(pathname==='/api/auth/session' && req.method==='GET'){
+        json(res,200,{user:{id:auth.user.id,email:auth.user.email}});return;
+      }
+      if(pathname==='/api/drafts' && req.method==='GET'){
+        const response=await upstream('/rest/v1/notice_drafts?select=id,payload,version,updated_at&order=updated_at.desc',{},auth.token);
+        const result=await readUpstream(response);
+        json(res,response.ok?200:response.status===404?503:502,response.ok?{drafts:result}:{error:response.status===404?'Supabase 마이그레이션을 먼저 적용해주세요.':'초안 목록을 읽지 못했습니다.'});return;
+      }
+      const draftMatch=pathname.match(/^\/api\/drafts\/([a-z0-9-]{1,100})$/i);
+      if(draftMatch && draftIdOk(draftMatch[1])){
+        const id=draftMatch[1];
+        if(req.method==='GET'){
+          const draft=await currentDraft(id,auth.token);json(res,draft?200:404,draft||{error:'저장된 초안이 없습니다.'});return;
+        }
+        if(req.method==='PUT' || req.method==='DELETE'){
+          const input=JSON.parse((await bytes(req,MAX_JSON)).toString('utf8'));
+          if(!Number.isInteger(input.expectedVersion)||input.expectedVersion<0||(req.method==='PUT'&&!validDraft(input.data))){
+            json(res,400,{error:'초안 형식과 버전을 확인해주세요.'});return;
+          }
+          const response=await upstream(req.method==='PUT'?'/rest/v1/rpc/save_notice_draft':'/rest/v1/rpc/delete_notice_draft',{
+            method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},
+            body:JSON.stringify(req.method==='PUT'?{p_id:id,p_expected_version:input.expectedVersion,p_payload:input.data}:{p_id:id,p_expected_version:input.expectedVersion}),
+          },auth.token);
+          const result=await readUpstream(response);
+          if(!response.ok && result?.message==='draft_conflict'){
+            json(res,409,{error:'다른 탭에서 초안이 변경되었습니다.',current:await currentDraft(id,auth.token)});return;
+          }
+          json(res,response.ok?200:502,response.ok?result:{error:'Supabase에 초안을 저장하지 못했습니다.'});return;
+        }
+      }
+      if(pathname==='/api/files' && req.method==='POST'){
+        let name='';try{name=decodeURIComponent(String(req.headers['x-file-name']||''));}catch{}
+        name=name.replace(/[\\/\x00-\x1f]/g,'').trim();
+        const ext=name.toLowerCase().split('.').pop();
+        if(!name||name.length>160||!MIME[ext]){json(res,400,{error:'PDF, DOCX, TXT, MD, PNG, JPG 파일만 저장할 수 있습니다.'});return;}
+        const file=await bytes(req,MAX_FILE);
+        if(!file.length){json(res,400,{error:'빈 파일은 저장할 수 없습니다.'});return;}
+        const id=randomUUID(),storagePath=`${auth.user.id}/${id}`;
+        const uploaded=await upstream(`/storage/v1/object/notice-files/${storagePath}`,{
+          method:'POST',headers:{'Content-Type':MIME[ext],'x-upsert':'false'},body:file,
+        },auth.token);
+        if(!uploaded.ok){json(res,502,{error:'Supabase Storage에 파일을 저장하지 못했습니다.'});return;}
+        const row={id,owner_id:auth.user.id,kind:'file',label:name,storage_path:storagePath,original_filename:name,mime_type:MIME[ext],byte_size:file.length,sha256:createHash('sha256').update(file).digest('hex')};
+        const created=await upstream('/rest/v1/notice_resources',{method:'POST',headers:{'Content-Type':'application/json','Prefer':'return=representation'},body:JSON.stringify(row)},auth.token);
+        if(!created.ok){
+          await upstream(`/storage/v1/object/notice-files/${storagePath}`,{method:'DELETE'},auth.token).catch(()=>{});
+          json(res,502,{error:'파일 메타데이터를 저장하지 못했습니다.'});return;
+        }
+        json(res,201,{resource:(await readUpstream(created))[0]});return;
+      }
+      const fileMatch=pathname.match(/^\/api\/files\/([a-f0-9-]{36})$/i);
+      if(fileMatch && req.method==='GET'){
+        const response=await upstream(`/rest/v1/notice_resources?id=eq.${fileMatch[1]}&kind=eq.file&select=id,storage_path,original_filename,mime_type&limit=1`,{},auth.token);
+        if(!response.ok){json(res,502,{error:'파일 정보를 읽지 못했습니다.'});return;}
+        const resource=(await readUpstream(response))[0];
+        if(!resource){json(res,404,{error:'파일이 없습니다.'});return;}
+        const downloaded=await upstream(`/storage/v1/object/authenticated/notice-files/${resource.storage_path}`,{},auth.token);
+        if(!downloaded.ok){json(res,502,{error:'파일을 읽지 못했습니다.'});return;}
+        const data=Buffer.from(await downloaded.arrayBuffer());
+        res.writeHead(200,{'Content-Type':resource.mime_type,'Content-Length':data.length,'Content-Disposition':`attachment; filename*=UTF-8''${encodeURIComponent(resource.original_filename)}`,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
+        res.end(data);return;
+      }
+      json(res,404,{error:'요청한 API가 없습니다.'});
+    } catch(error){
+      if(error instanceof SyntaxError){json(res,400,{error:'JSON 형식을 확인해주세요.'});return;}
+      console.error('Supabase API 오류:',error.message);
+      json(res,error.status||502,{error:error.status?error.message:'Supabase 연결에 실패했습니다.'});
+    }
+  };
+}

@@ -1,5 +1,22 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { createSupabaseApi } from './supabase-api.mjs';
+
+function localEnv() {
+  try {
+    const contents=readFileSync(new URL('../.env',import.meta.url),'utf8');
+    return Object.fromEntries(contents.split(/\r?\n/).filter(line=>line && !line.trimStart().startsWith('#')).map(line=>{
+      const at=line.indexOf('=');
+      return at<0?[]:[line.slice(0,at).trim(),line.slice(at+1).trim().replace(/^['"]|['"]$/g,'')];
+    }).filter(pair=>pair.length===2));
+  } catch {return {};}
+}
+const env=localEnv();
+const handleApi=createSupabaseApi({
+  url:process.env.SUPABASE_URL||env.SUPABASE_URL,
+  key:process.env.SUPABASE_PUBLISHABLE_KEY||env.SUPABASE_PUBLISHABLE_KEY,
+});
 
 const assets = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
@@ -17,12 +34,15 @@ if (!/^\d+$/.test(requestedPort) || Number(requestedPort) < 1 || Number(requeste
 const port = Number(requestedPort);
 
 const server = createServer(async (req, res) => {
+  const hostname=String(req.headers.host||'').split(':')[0];
+  if(!['localhost','127.0.0.1'].includes(hostname)){res.writeHead(403);res.end();return;}
+  const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
+  if(pathname.startsWith('/api/')){await handleApi(req,res,pathname);return;}
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.writeHead(405, { Allow: 'GET, HEAD' });
     res.end();
     return;
   }
-  const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
   if (pathname === '/favicon.ico') { res.writeHead(204); res.end(); return; }
   const asset = assets.get(pathname);
   if (!asset) { res.writeHead(404); res.end('Not found'); return; }

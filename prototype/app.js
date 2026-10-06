@@ -63,6 +63,11 @@ let records = structuredClone(INITIAL_RECORDS);
 let completed = {};
 let calendar = {year:2026,month:9,selected:'2026-10-03',view:'calendar'};
 let drafts = {};
+let cloudConfigured = false;
+let cloudUser = null;
+const cloudState = {};
+const cloudTimers = new Map();
+const cloudSaves = new Map();
 let activeTab = 'tickets';
 let recipientPage = 0;
 let recipientSearch = '';
@@ -110,7 +115,7 @@ function validRecord(r) {
 function restore() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (!saved || ![1,2,3].includes(saved.version)) return;
+    if (!saved || ![1,2,3,4].includes(saved.version)) return;
     if (saved.version>=2 && Array.isArray(saved.projects) && Array.isArray(saved.applications)) {
       const validProjects=saved.projects.filter(p=>p && typeof p.id==='string' && /^[a-z0-9-]+$/.test(p.id) && typeof p.name==='string' && p.name.trim() && typeof p.description==='string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(p.deadlineAt||'') && !Number.isNaN(Date.parse(p.deadlineAt)) && /^\d{4}-\d{2}-\d{2}$/.test(p.event||'') && Array.isArray(p.targetIds) && Array.isArray(p.requiredIds) && ['immediate','separate'].includes(p.confirmationMode));
       if (validProjects.length) {
@@ -137,11 +142,180 @@ function restore() {
       const days=new Date(Date.UTC(c.year,c.month+1,0)).getUTCDate();
       calendar={year:c.year,month:c.month,view:c.view==='list'?'list':'calendar',selected:typeof c.selected==='string'&&c.selected.startsWith(prefix)&&/^\d{4}-\d{2}-\d{2}$/.test(c.selected)&&Number(c.selected.slice(8))>=1&&Number(c.selected.slice(8))<=days?c.selected:prefix+'01'};
     }
+    if(saved.version>=4 && saved.drafts && typeof saved.drafts==='object') {
+      const knownEmployees=new Set(EMPLOYEES.map(e=>e.id)),knownTeams=new Set(TEAMS.map(t=>t.id)),knownChannels=new Set(CHANNELS.map(c=>c.id));
+      TICKETS.filter(t=>ticketState(t)==='pending'&&getProject(t.project)).forEach(t=>{
+        const source=saved.drafts[t.id];if(!source||typeof source!=='object')return;
+        const d=getDraft(t);
+        if(typeof source.body==='string'&&source.body.length<=20000)d.body=source.body;
+        if(['friendly','concise','action'].includes(source.tone))d.tone=source.tone;
+        if(['dm','channel'].includes(source.mode))d.mode=source.mode;
+        if(['pending','project','company'].includes(source.scope))d.scope=source.scope;
+        if(['team','people'].includes(source.dmSelection))d.dmSelection=source.dmSelection;
+        if(Array.isArray(source.teams))d.teams=[...new Set(source.teams.filter(id=>knownTeams.has(id)))];
+        if(Array.isArray(source.selectedIds))d.selectedIds=[...new Set(source.selectedIds.filter(id=>knownEmployees.has(id)))];
+        if(Array.isArray(source.channels))d.channels=[...new Set(source.channels.filter(id=>knownChannels.has(id)))];
+        d._cloudVersion=Number.isInteger(source._cloudVersion)?source._cloudVersion:0;
+        d._cloudRevision=Number.isInteger(source._cloudRevision)?source._cloudRevision:0;
+        d._cloudDirty=source._cloudDirty===true || source._cloudVersion===undefined;
+        if(Array.isArray(source.resources))d.resources=source.resources.filter(item=>item && ['file','link'].includes(item.kind) && typeof item.label==='string').slice(0,20);
+      });
+    }
   } catch { /* Storage is optional; retain usable defaults. */ }
 }
 function persist() {
-  try { localStorage.setItem(STORAGE_KEY,JSON.stringify({version:3,projects:PROJECTS,applications,applicationEvents,records,completed,calendar})); return true; }
+  try {
+    const savedDrafts=Object.fromEntries(Object.entries(drafts).map(([id,{confirmed,confirmedSignature,...draft}])=>[id,draft]));
+    localStorage.setItem(STORAGE_KEY,JSON.stringify({version:4,projects:PROJECTS,applications,applicationEvents,records,completed,calendar,drafts:savedDrafts}));
+    return true;
+  }
   catch { toast('브라우저에 저장하지 못했어요. 이 화면을 열어둔 동안에는 내용을 유지해요.'); return false; }
+}
+async function cloudRequest(path,{method='GET',body,headers={}}={}) {
+  const response=await fetch(path,{method,credentials:'same-origin',headers:{...(body && !(body instanceof Blob)?{'Content-Type':'application/json'}:{}),...headers},body:body instanceof Blob?body:body===undefined?undefined:JSON.stringify(body),cache:'no-store'});
+  const result=await response.json().catch(()=>({error:'서버 응답을 읽지 못했습니다.'}));
+  if(!response.ok)throw Object.assign(new Error(result.error||'서버 요청에 실패했습니다.'),{status:response.status,current:result.current});
+  return result;
+}
+const cloudPayload = d => ({body:d.body,tone:d.tone,mode:d.mode,scope:d.scope,teams:d.teams,dmSelection:d.dmSelection,selectedIds:d.selectedIds,channels:d.channels,resources:d.resources||[]});
+function cloudLabel(t) {
+  const state=cloudState[t.id];
+  if(!cloudConfigured)return 'Supabase 연결 설정이 필요해요.';
+  if(!cloudUser)return '브라우저에 저장 중 · Supabase 로그인 후 서버에 저장할 수 있어요.';
+  return ({pending:'서버 저장 대기 중…',saving:'서버에 저장 중…',saved:`서버에 저장됨 · ${state?.updatedAt?new Date(state.updatedAt).toLocaleTimeString('ko-KR'):''}`,error:'서버 저장 실패 · 다시 시도해주세요.',conflict:'다른 탭에서 이 초안을 수정했어요.'})[state?.status]||'서버 초안을 확인 중…';
+}
+function updateCloudView(t) {
+  if(route().view!=='review'||route().id!==t.id)return;
+  const label=$('#draft-save-state');if(!label)return;
+  label.textContent=cloudLabel(t);
+  label.dataset.state=cloudState[t.id]?.status||'local';
+  $('#draft-retry').hidden=cloudState[t.id]?.status!=='error';
+  $('#draft-conflict-actions').hidden=cloudState[t.id]?.status!=='conflict';
+  $('#send-button').disabled=!canSend(t);
+}
+function setCloudState(t,status,extra={}) {
+  cloudState[t.id]={...cloudState[t.id],status,...extra};
+  updateCloudView(t);
+}
+function applyCloudDraft(t,record) {
+  const d=getDraft(t),source=record.payload||{};
+  for(const field of ['body','tone','mode','scope','teams','dmSelection','selectedIds','channels','resources'])if(source[field]!==undefined)d[field]=structuredClone(source[field]);
+  d._cloudVersion=record.version;d._cloudDirty=false;d._cloudRevision=0;
+  d.confirmed=false;d.confirmedSignature='';
+  setCloudState(t,'saved',{updatedAt:record.updated_at,remote:null});
+  persist();
+}
+async function hydrateCloudDrafts() {
+  const {drafts:remote}=await cloudRequest('/api/drafts');
+  const byId=new Map(remote.map(item=>[item.id,item]));
+  for(const t of TICKETS.filter(item=>ticketState(item)==='pending')){
+    const local=drafts[t.id],record=byId.get(t.id);
+    if(record){
+      if(local?._cloudDirty && local._cloudVersion!==record.version){setCloudState(t,'conflict',{remote:record});continue;}
+      if(local?._cloudDirty){setCloudState(t,'pending',{remote:record});scheduleCloudSave(t,true);continue;}
+      applyCloudDraft(t,record);
+    } else if(local){
+      if(local._cloudVersion){setCloudState(t,'conflict',{remote:null});continue;}
+      scheduleCloudSave(t,true);
+    }
+  }
+}
+function scheduleCloudSave(t,keepRevision=false) {
+  const d=getDraft(t);
+  if(!keepRevision)d._cloudRevision=(d._cloudRevision||0)+1;
+  d._cloudDirty=true;persist();
+  if(!cloudUser)return;
+  if(cloudState[t.id]?.status==='conflict')return;
+  clearTimeout(cloudTimers.get(t.id));setCloudState(t,'pending');
+  cloudTimers.set(t.id,setTimeout(()=>saveCloudDraft(t),750));
+}
+async function saveCloudDraft(t) {
+  clearTimeout(cloudTimers.get(t.id));cloudTimers.delete(t.id);
+  if(cloudSaves.has(t.id))return cloudSaves.get(t.id);
+  const d=getDraft(t);
+  if(!cloudUser||!d._cloudDirty||cloudState[t.id]?.status==='conflict')return false;
+  const revision=d._cloudRevision||0;
+  setCloudState(t,'saving');
+  const request=(async()=>{
+    try {
+      const result=await cloudRequest(`/api/drafts/${encodeURIComponent(t.id)}`,{method:'PUT',body:{expectedVersion:d._cloudVersion||0,data:cloudPayload(d)}});
+      d._cloudVersion=result.version;d._cloudDirty=(d._cloudRevision||0)!==revision;
+      persist();setCloudState(t,d._cloudDirty?'pending':'saved',{updatedAt:result.updated_at,remote:null});return true;
+    } catch(error){setCloudState(t,error.status===409?'conflict':'error',{remote:error.current||null});return false;}
+  })();
+  cloudSaves.set(t.id,request);
+  const success=await request;cloudSaves.delete(t.id);
+  if(success&&d._cloudDirty)scheduleCloudSave(t,true);
+  return success;
+}
+async function initializeCloud() {
+  try {
+    cloudConfigured=(await cloudRequest('/api/status')).configured;
+    if(cloudConfigured){
+      try {cloudUser=(await cloudRequest('/api/auth/session')).user;}
+      catch {cloudUser=null;}
+      if(cloudUser)try {await hydrateCloudDrafts();}catch {for(const t of TICKETS.filter(item=>ticketState(item)==='pending'))if(drafts[t.id])setCloudState(t,'error');}
+    }
+  } catch {cloudConfigured=false;}
+  renderCloudButton();render();
+}
+function renderCloudButton(){
+  $('#cloud-open').textContent=!cloudConfigured?'Supabase 설정 필요':cloudUser?`서버 연결 · ${cloudUser.email}`:'Supabase 로그인';
+}
+function openCloudDialog() {
+  $('#cloud-dialog').innerHTML=`<div class="dialog-heading"><div><p class="eyebrow">서버 저장</p><h2 id="cloud-dialog-title">Supabase 연결</h2></div><button class="button icon-button" data-action="close-cloud" aria-label="창 닫기">${icon('close')}</button></div><div class="dialog-body">${!cloudConfigured?'<p>서버에 SUPABASE_URL과 SUPABASE_PUBLISHABLE_KEY 환경 변수를 설정해주세요. 로컬 실행에서는 .env를 사용합니다.</p>':cloudUser?`<p>${escapeHtml(cloudUser.email)} 계정으로 로그인했습니다. 안내 초안과 첨부 파일만 Supabase에 저장됩니다. 프로젝트·신청 상태·보낸 기록은 아직 이 브라우저에 있습니다.</p><button class="button" data-action="cloud-signout">로그아웃</button>`:`<form id="cloud-login-form"><div class="field"><label for="cloud-email">이메일</label><input id="cloud-email" type="email" required autocomplete="username"></div><div class="field"><label for="cloud-password">비밀번호</label><input id="cloud-password" type="password" required autocomplete="current-password"></div><button class="button primary" type="submit">로그인</button><p class="help">Supabase에서 허용된 운영자 계정으로 로그인하세요.</p></form>`}<p id="cloud-error" class="error-message" role="alert" hidden></p></div>`;
+  $('#cloud-dialog').showModal();
+}
+function closeCloudDialog() { $('#cloud-dialog').close(); }
+async function loginCloud(event) {
+  event.preventDefault();
+  const submit=$('#cloud-login-form button[type="submit"]'),error=$('#cloud-error');
+  submit.disabled=true;error.hidden=true;
+  try {
+    const result=await cloudRequest('/api/auth/login',{method:'POST',body:{email:$('#cloud-email').value.trim(),password:$('#cloud-password').value}});
+    cloudUser=result.user;
+    await hydrateCloudDrafts();
+    closeCloudDialog();renderCloudButton();render();toast('Supabase에 연결했습니다.');
+  } catch(cause) {
+    error.textContent=cause.message;error.hidden=false;
+    if(cloudUser){
+      for(const t of TICKETS.filter(item=>drafts[item.id]))setCloudState(t,'error');
+      closeCloudDialog();renderCloudButton();render();toast(`로그인했지만 ${cause.message}`);
+    }
+  } finally {if(submit.isConnected)submit.disabled=false;}
+}
+async function logoutCloud() {
+  for(const t of TICKETS.filter(item=>drafts[item.id]?._cloudDirty)){
+    if(!await saveCloudDraft(t)){toast('저장되지 않은 초안이 있어요. 저장 상태를 확인한 뒤 로그아웃해주세요.');return;}
+  }
+  try {await cloudRequest('/api/auth/logout',{method:'POST'});} catch { /* Clear this browser session even if the upstream logout fails. */ }
+  cloudUser=null;drafts={};
+  for(const timer of cloudTimers.values())clearTimeout(timer);
+  cloudTimers.clear();
+  for(const id of Object.keys(cloudState))delete cloudState[id];
+  persist();closeCloudDialog();renderCloudButton();render();toast('로그아웃했습니다.');
+}
+async function uploadNoticeFile(t,file) {
+  if(!cloudUser){toast('Supabase에 로그인해주세요.');return;}
+  if(file.size>4_000_000){toast('4MB 이하 파일을 선택해주세요.');return;}
+  setCloudState(t,'saving');
+  try {
+    const resource=(await cloudRequest('/api/files',{method:'POST',body:file,headers:{'x-file-name':encodeURIComponent(file.name)}})).resource;
+    const d=getDraft(t);d.resources=[...(d.resources||[]),{kind:'file',id:resource.id,label:resource.label,byte_size:resource.byte_size,mime_type:resource.mime_type,sha256:resource.sha256,version:resource.version}];
+    d.confirmed=false;render();updateApproval(t);toast('파일을 비공개 저장소에 저장했어요.');
+  } catch(error){setCloudState(t,'error');toast(error.message);}
+}
+async function refreshCloudDraft(t) {
+  if(!cloudUser||!drafts[t.id])return;
+  try {
+    const remote=await cloudRequest(`/api/drafts/${encodeURIComponent(t.id)}`);
+    const d=getDraft(t);
+    if(remote.version===d._cloudVersion)return;
+    if(d._cloudDirty)setCloudState(t,'conflict',{remote});
+    else {applyCloudDraft(t,remote);render();}
+  } catch(error){
+    if(error.status===404 && getDraft(t)._cloudVersion)setCloudState(t,'conflict',{remote:null});
+  }
 }
 function toast(message) {
   clearTimeout(toastTimeout);$('#toast').textContent=message;$('#toast').hidden=false;
@@ -257,6 +431,7 @@ function saveProjectForm(event) {
     const next={...(old||{}),id:old?.id||`local-${crypto.randomUUID()}`,name,short:name,type:data.get('type'),symbol:old?.symbol||'folder',description,owner,start,deadlineAt,deadline:deadlineAt.slice(0,10),event:eventDate,eventLabel:old?.eventLabel||'운영 일정',applicationUrl:url,confirmationMode:data.get('confirmationMode'),targetIds,requiredIds,dataKind:'local',lastCheckedAt:old?.lastCheckedAt||null,reference:appliedDocumentName||old?.reference||'직접 입력'};
     if(old){PROJECTS=PROJECTS.map(p=>p.id===id?next:p);if(old.confirmationMode!==next.confirmationMode){applications=applications.map(r=>r.projectId===id&&r.status!=='cancelled'?{...r,status:next.confirmationMode==='immediate'?'confirmed':'applied'}:r);}}
     else PROJECTS.push(next);
+    if(old)TICKETS.filter(t=>t.project===id).forEach(t=>{if(drafts[t.id])drafts[t.id].confirmed=false;});
     projectFormError='';persist();location.hash=`project/${next.id}`;render();toast(old?'운영 정보를 저장했어요.':'새 행사·복지를 등록했어요.');
   } catch(error) {projectFormError=error.message;$('#project-form-error').textContent=projectFormError;$('#project-form-error').hidden=false;}
 }
@@ -292,7 +467,7 @@ function draftText(t,tone='friendly') {
   return buildDraftMessage({title:p.name,deadline:`${dateLabel(p.deadline)} ${p.deadlineAt.slice(11)}`,owner:p.owner,applicationUrl:p.applicationUrl},tone);
 }
 function getDraft(t) {
-  if(!drafts[t.id])drafts[t.id]={body:draftText(t),tone:'friendly',mode:'dm',scope:t.project==='event'?'project':'pending',teams:TEAMS.map(t=>t.id),dmSelection:'team',selectedIds:[],channels:[],confirmed:false};
+  if(!drafts[t.id])drafts[t.id]={body:draftText(t),tone:'friendly',mode:'dm',scope:t.project==='event'?'project':'pending',teams:TEAMS.map(t=>t.id),dmSelection:'team',selectedIds:[],channels:[],confirmed:false,confirmedSignature:'',resources:[],_cloudVersion:0,_cloudRevision:0,_cloudDirty:false};
   return drafts[t.id];
 }
 function audience(p,d) {
@@ -319,14 +494,15 @@ function recipientTable(list,p) {
 }
 function reviewPage(id) {
   const t=getTicket(id),p=getProject(t.project),d=getDraft(t);
-  return `<a href="#project/${p.id}" class="back-link">${icon('back')} ${p.name} 전체 티켓</a>${heading('보낼 내용 확인',`${p.name} · ${t.title}`)}<div class="review-grid"><section class="panel form-panel"><h2>동료에게 보낼 메시지</h2><p class="caption muted" style="margin:7px 0 22px">준비된 초안이에요. 일정과 내용을 확인하고 다듬어주세요.</p><div class="field"><label for="draft-tone">말투</label><select id="draft-tone"><option value="friendly" ${d.tone==='friendly'?'selected':''}>친근하고 밝게</option><option value="concise" ${d.tone==='concise'?'selected':''}>친근하고 간결하게</option><option value="action" ${d.tone==='action'?'selected':''}>신청 요청을 명확하게</option></select><p class="help">말투를 바꾸면 아래 본문이 바로 새 초안으로 바뀝니다. 직접 수정한 내용도 교체돼요.</p></div><div class="draft-area"><label class="preview-label" for="draft-body"><span>메시지 본문</span>${tag('예시 초안')}</label><textarea id="draft-body" maxlength="20000">${escapeHtml(d.body)}</textarea><p class="help">신청 링크는 예시예요. 실제 연결 전에 사내 신청 URL로 바꿔주세요.</p></div></section><section class="panel form-panel"><h2 style="margin-bottom:22px">보내는 방법과 대상</h2><div id="recipient-settings">${recipientSettings(t)}</div></section></div><div class="approval-bar"><div><label class="confirm-row"><input type="checkbox" id="send-confirm" ${d.confirmed?'checked':''}><span id="confirmation-label">${confirmationLabel(d)}</span></label><p>체크하면 최종 본문과 대상을 확인하는 창이 열립니다.</p></div><button class="button primary" id="send-button" data-action="simulate-send" ${canSend(t)?'':'disabled'}>${sendLabel(t)} ${icon('arrow')}</button></div>`;
+  const resources=(d.resources||[]).map((item,index)=>`<div class="draft-resource"><span>${item.kind==='file'?'📎':'🔗'} ${escapeHtml(item.label)}${item.kind==='file'?` · ${Math.ceil((item.byte_size||0)/1024)} KB`:''}</span>${item.kind==='file'&&cloudUser?`<a class="button compact" href="/api/files/${encodeURIComponent(item.id)}" target="_blank" rel="noopener noreferrer">열기</a>`:''}<button class="button compact" data-remove-resource="${index}">제거</button></div>`).join('')||'<p class="help">이번 안내에 추가한 자료가 없어요.</p>';
+  return `<a href="#project/${p.id}" class="back-link">${icon('back')} ${p.name} 전체 티켓</a>${heading('보낼 내용 확인',`${p.name} · ${t.title}`)}<div class="review-grid"><section class="panel form-panel"><h2>동료에게 보낼 메시지</h2><p class="caption muted" style="margin:7px 0 22px">준비된 초안이에요. 일정과 내용을 확인하고 다듬어주세요.</p><div class="draft-save-box" role="status" aria-live="polite"><span id="draft-save-state">${escapeHtml(cloudLabel(t))}</span><button class="button compact" id="draft-retry" data-action="retry-draft-save" ${cloudState[t.id]?.status==='error'?'':'hidden'}>다시 시도</button><span id="draft-conflict-actions" class="actions" ${cloudState[t.id]?.status==='conflict'?'':'hidden'}><button class="button compact" data-action="load-cloud-draft">서버 내용 불러오기</button><button class="button compact" data-action="overwrite-cloud-draft">내 변경 저장</button></span></div><div class="field"><label for="draft-tone">말투</label><select id="draft-tone"><option value="friendly" ${d.tone==='friendly'?'selected':''}>친근하고 밝게</option><option value="concise" ${d.tone==='concise'?'selected':''}>친근하고 간결하게</option><option value="action" ${d.tone==='action'?'selected':''}>신청 요청을 명확하게</option></select><p class="help">말투를 바꾸면 아래 본문이 바로 새 초안으로 바뀝니다. 직접 수정한 내용도 교체돼요.</p></div><div class="draft-area"><label class="preview-label" for="draft-body"><span>메시지 본문</span>${tag('예시 초안')}</label><textarea id="draft-body" maxlength="20000">${escapeHtml(d.body)}</textarea><p class="help">신청 링크는 예시예요. 실제 연결 전에 사내 신청 URL로 바꿔주세요.</p></div><div class="draft-attachments"><h3>이번 안내에 포함할 자료</h3><p class="help">링크는 본문에 넣고, 파일은 로그인한 계정의 비공개 저장소에 저장해요. 실제 Slack 전송은 아직 연결되지 않았어요.</p><div id="draft-resources">${resources}</div><div class="resource-add"><input id="resource-label" type="text" maxlength="160" aria-label="링크 이름" placeholder="링크 이름"><input id="resource-url" type="url" maxlength="2000" aria-label="링크 주소" placeholder="https://…"><button class="button" data-action="add-resource-link">링크 추가</button></div><div class="field"><label for="resource-file">파일 첨부 (PDF·DOCX·TXT·MD·이미지, 4MB 이하)</label><input id="resource-file" type="file" accept=".pdf,.docx,.txt,.md,.png,.jpg,.jpeg" ${cloudUser?'':'disabled'}></div>${cloudUser?'':'<p class="help">파일을 저장하려면 상단의 Supabase 로그인을 완료해주세요.</p>'}</div></section><section class="panel form-panel"><h2 style="margin-bottom:22px">보내는 방법과 대상</h2><div id="recipient-settings">${recipientSettings(t)}</div></section></div><div class="approval-bar"><div><label class="confirm-row"><input type="checkbox" id="send-confirm" ${d.confirmed?'checked':''}><span id="confirmation-label">${confirmationLabel(d)}</span></label><p>체크하면 최종 본문과 대상을 확인하는 창이 열립니다.</p></div><button class="button primary" id="send-button" data-action="simulate-send" ${canSend(t)?'':'disabled'}>${sendLabel(t)} ${icon('arrow')}</button></div>`;
 }
 const confirmationLabel = d => d.mode==='dm'?'보낼 내용과 DM을 받을 동료를 확인했어요.':'보낼 내용과 게시할 채널·공개 범위를 확인했어요.';
-const approvalSignature = t => {const d=getDraft(t),a=audience(getProject(t.project),d);return JSON.stringify({body:d.body,mode:d.mode,recipientIds:a.list.map(e=>e.id),channelIds:a.channels.map(c=>c.id)});};
-const canSend = t => {const d=getDraft(t),a=audience(getProject(t.project),d);return ticketState(t)==='pending'&&d.confirmed&&d.confirmedSignature===approvalSignature(t)&&d.body.trim()&&(d.mode==='dm'?a.list.length:a.channels.length);};
+const approvalSignature = t => {const d=getDraft(t),a=audience(getProject(t.project),d);return JSON.stringify({body:d.body,mode:d.mode,recipientIds:a.list.map(e=>e.id),channelIds:a.channels.map(c=>c.id),resources:d.resources||[]});};
+const canSend = t => {const d=getDraft(t),a=audience(getProject(t.project),d);return ticketState(t)==='pending'&&(!cloudUser||cloudState[t.id]?.status==='saved'&&!d._cloudDirty)&&d.confirmed&&d.confirmedSignature===approvalSignature(t)&&d.body.trim()&&(d.mode==='dm'?a.list.length:a.channels.length);};
 const sendLabel = t => {const d=getDraft(t),a=audience(getProject(t.project),d);return d.mode==='dm'?`${a.list.length}명에게 DM 보내기 (예시)`:`${a.channels.length}개 채널에 게시 (예시)`;};
 function updateApproval(t) {
-  const d=getDraft(t);$('#send-confirm').checked=d.confirmed;$('#confirmation-label').textContent=confirmationLabel(d);$('#send-button').disabled=!canSend(t);$('#send-button').innerHTML=escapeHtml(sendLabel(t))+' '+icon('arrow');
+  const d=getDraft(t);$('#send-confirm').checked=d.confirmed;$('#confirmation-label').textContent=confirmationLabel(d);$('#send-button').disabled=!canSend(t);$('#send-button').innerHTML=escapeHtml(sendLabel(t))+' '+icon('arrow');scheduleCloudSave(t);
 }
 function updateRecipients(t) {
   $('#recipient-settings').innerHTML=recipientSettings(t);const all=$('#all-teams');if(all)all.indeterminate=getDraft(t).teams.length>0&&getDraft(t).teams.length<TEAMS.length;filterRecipientRows();updateApproval(t);
@@ -356,6 +532,11 @@ function renderHistoryDialog() {
   const r=records.find(r=>r.id===historyContext.id),p=getProject(r.project),edit=historyContext.edit;
   $('#history-dialog').innerHTML=`${dialogHeading(r.title,`${recordDate(r.date)} · ${r.route}`,p.name+' / 보낸 안내')}<form id="history-form"><div class="dialog-body"><div class="preview-label"><span class="field-label" style="margin:0">안내 원문</span><div class="actions">${tag(r.source==='manual'?'직접 추가한 기록':r.source==='simulated'?'보내기 예시':'예시 원문',r.source==='simulated'?'green':'gray')}<button type="button" class="button compact" data-action="edit-history">${edit?'원문 보기':'기록 내용 수정'}</button></div></div>${edit?`<textarea id="history-body" maxlength="20000" aria-label="안내 원문">${escapeHtml(r.body)}</textarea><p class="help" style="margin-bottom:22px">이곳에 보관한 기록만 수정돼요. Slack 메시지는 변경하지 않아요.</p>`:`<div class="message-original">${escapeHtml(r.body||'원문이 아직 등록되지 않았어요. 기록 내용 수정에서 추가할 수 있어요.')}</div>`}<div class="field" style="margin-bottom:0"><label for="history-url">Slack 메시지 링크</label><input id="history-url" type="url" placeholder="https://워크스페이스.slack.com/archives/…" value="${escapeHtml(r.url)}" maxlength="2000"><p class="help">Slack에서 ‘메시지 링크 복사’로 가져온 주소를 붙여넣어주세요.</p></div><p id="history-error" class="error-message" role="alert" hidden></p></div><div class="dialog-footer"><span class="help">이 브라우저에 기록을 저장해요.</span><div class="actions">${r.url?`<a class="button" href="${escapeHtml(r.url)}" target="_blank" rel="noopener noreferrer">Slack에서 열기 ${icon('external')}</a>`:''}<button class="button primary" type="submit">${edit?'수정 내용 저장':'링크 저장'}</button></div></div></form>`;
   $('#history-form .dialog-body').insertAdjacentHTML('afterbegin',`<div class="field"><label for="history-kind">안내 종류</label><select id="history-kind"><option value="initial" ${recordKind(r)==='initial'?'selected':''}>최초 공지</option><option value="reminder" ${recordKind(r)==='reminder'?'selected':''}>리마인드 알림</option></select></div>`);
+  const resources=(r.resources||[]).map(item=>{
+    const link=item.kind==='link'&&/^https:\/\//i.test(item.url||'')?`<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">링크 열기</a>`:item.kind==='file'&&/^[a-f0-9-]{36}$/i.test(item.id||'')&&cloudUser?`<a href="/api/files/${escapeHtml(item.id)}" target="_blank" rel="noopener noreferrer">파일 열기</a>`:'';
+    return `<div class="draft-resource"><span>${item.kind==='file'?'첨부 파일':'본문 링크'} · ${escapeHtml(item.label)}</span>${link}</div>`;
+  }).join('');
+  $('#history-url').closest('.field').insertAdjacentHTML('beforebegin',`<div class="history-resources"><h3>당시 포함한 자료</h3>${resources||'<p class="help">별도로 기록된 자료가 없어요.</p>'}</div>`);
 }
 function newHistory(projectId) {
   historyContext={id:null,edit:true,origin:document.activeElement};
@@ -397,7 +578,8 @@ function openSendPreview(t) {
   if(d.mode==='channel'&&!a.channels.length){toast('게시할 채널을 추가해주세요.');return;}
   previewContext={ticketId:t.id,signature:approvalSignature(t),origin:document.activeElement};
   const targets=d.mode==='dm'?`<p class="preview-target-summary">개별 DM ${a.list.length}명 · 필수 참여 중 신청 전 ${a.required}명</p><div class="preview-target-list">${a.list.map(e=>`<span>${escapeHtml(e.name)} · ${escapeHtml(TEAMS.find(team=>team.id===e.team).name)}</span>`).join('')}</div>`:`<p class="preview-target-summary">채널 ${a.channels.length}곳에 각각 게시 · 고유 공개 인원 ${a.list.length}명</p><div class="preview-target-list">${a.channelAudiences.map(({channel,members})=>`<span>${escapeHtml(channel.name)} · 예시 구성원 ${members.length}명 · 프로젝트 대상 외 ${members.filter(e=>!p.targetIds.includes(e.id)).length}명</span>`).join('')}</div>`;
-  $('#send-preview-dialog').innerHTML=`<div class="dialog-heading"><div><p class="eyebrow">최종 확인</p><h2 id="send-preview-title">보낼 본문과 대상을 확인해주세요</h2><p>${escapeHtml(p.name)} · ${escapeHtml(t.title)}</p></div><button class="button icon-button" data-action="close-preview" aria-label="최종 확인 창 닫기">${icon('close')}</button></div><div class="dialog-body"><h3>메시지 본문</h3><div class="message-original">${escapeHtml(d.body)}</div><h3>${d.mode==='dm'?'DM을 받을 동료':'게시할 채널과 공개 범위'}</h3>${targets}<label class="confirm-row preview-confirm"><input type="checkbox" id="preview-ack"><span>위 본문과 ${d.mode==='dm'?'받을 동료':'게시할 채널'}를 확인했어요.</span></label></div><div class="dialog-footer"><span class="help">이번 프로토타입에서는 실제 메시지를 보내지 않아요.</span><div class="actions"><button class="button" data-action="close-preview">돌아가기</button><button class="button primary" data-action="confirm-preview" disabled>확인 완료</button></div></div>`;
+  const resources=(d.resources||[]).map(item=>`<div class="draft-resource"><span>${item.kind==='file'?'첨부 파일':'본문 링크'} · ${escapeHtml(item.label)}</span>${item.kind==='link'?`<span>${escapeHtml(item.url)}</span>`:''}</div>`).join('')||'<p class="help">선택한 자료 없음</p>';
+  $('#send-preview-dialog').innerHTML=`<div class="dialog-heading"><div><p class="eyebrow">최종 확인</p><h2 id="send-preview-title">보낼 본문과 대상을 확인해주세요</h2><p>${escapeHtml(p.name)} · ${escapeHtml(t.title)}</p></div><button class="button icon-button" data-action="close-preview" aria-label="최종 확인 창 닫기">${icon('close')}</button></div><div class="dialog-body"><h3>메시지 본문</h3><div class="message-original">${escapeHtml(d.body)}</div><h3>이번 안내 자료</h3>${resources}<h3>${d.mode==='dm'?'DM을 받을 동료':'게시할 채널과 공개 범위'}</h3>${targets}<label class="confirm-row preview-confirm"><input type="checkbox" id="preview-ack"><span>위 본문·자료와 ${d.mode==='dm'?'받을 동료':'게시할 채널'}를 확인했어요.</span></label></div><div class="dialog-footer"><span class="help">이번 프로토타입에서는 실제 메시지를 보내지 않아요.</span><div class="actions"><button class="button" data-action="close-preview">돌아가기</button><button class="button primary" data-action="confirm-preview" disabled>확인 완료</button></div></div>`;
   $('#send-preview-dialog').showModal();
 }
 function closeSendPreview() {
@@ -433,17 +615,25 @@ function saveNewHistoryForm(event) {
   if(!record.title||!record.route||!validRecord(record)){historyError('제목, 날짜와 보낸 곳을 확인해주세요.');return;}
   records.push(record);const saved=persist();closeHistory();render();if(saved)toast('새 안내 기록을 추가했어요.');
 }
-function simulateSend(t) {
+async function simulateSend(t) {
   if(!canSend(t))return;if(records.length>=100){toast('프로토타입의 안내 기록 저장 한도에 도달했어요.');return;}
   const d=getDraft(t),a=audience(getProject(t.project),d),id=crypto.randomUUID();
+  if(cloudUser){
+    try {
+      const remote=await cloudRequest(`/api/drafts/${encodeURIComponent(t.id)}`);
+      if(remote.version!==d._cloudVersion){setCloudState(t,'conflict',{remote});toast('다른 탭에서 초안이 바뀌었어요. 다시 확인해주세요.');return;}
+    } catch {toast('서버 초안의 최신 상태를 확인하지 못했어요. 다시 시도해주세요.');return;}
+  }
   const route=d.mode==='dm'?`DM · 동료 ${a.list.length}명 · ${d.dmSelection==='people'?'개별 선택':d.teams.length===TEAMS.length?'전체 팀':d.teams.map(id=>TEAMS.find(t=>t.id===id).name).join('·')}`:`${a.channels.map(c=>c.name).join(' · ')} · 게시 ${a.channels.length}건`;
-  records.push({id,project:t.project,ticket:t.id,title:t.title,date:'2026-10-03T10:00',route,body:d.body,url:'',source:'simulated',kind:recordKind({title:t.title,ticket:t.id}),recipientIds:d.mode==='dm'?a.list.map(e=>e.id):[],channelIds:d.mode==='channel'?a.channels.map(c=>c.id):[]});
-  completed[t.id]=id;d.confirmed=false;const saved=persist();activeTab='tickets';location.hash=`project/${t.project}`;
+  records.push({id,project:t.project,ticket:t.id,title:t.title,date:'2026-10-03T10:00',route,body:d.body,url:'',source:'simulated',kind:recordKind({title:t.title,ticket:t.id}),recipientIds:d.mode==='dm'?a.list.map(e=>e.id):[],channelIds:d.mode==='channel'?a.channels.map(c=>c.id):[],resources:structuredClone(d.resources||[])});
+  clearTimeout(cloudTimers.get(t.id));delete cloudState[t.id];
+  completed[t.id]=id;delete drafts[t.id];const saved=persist();activeTab='tickets';location.hash=`project/${t.project}`;
   if(saved)toast('안내 보내기를 완료했어요 (예시). 이 티켓의 원문을 기록했어요.');
 }
 
 document.addEventListener('click',event=>{
   if(event.target.closest('.skip-link')){event.preventDefault();$('#content').focus();return;}
+  if(event.target.closest('#cloud-open')){openCloudDialog();return;}
   if(event.target.id==='send-confirm'){event.preventDefault();const r=route();if(r.view==='review')openSendPreview(getTicket(r.id));return;}
   const button=event.target.closest('button');if(!button)return;
   if(button.dataset.application){
@@ -458,11 +648,44 @@ document.addEventListener('click',event=>{
   if(button.dataset.date){calendar.selected=button.dataset.date;refreshCalendar();$(`[data-date="${calendar.selected}"]`)?.focus();return;}
   if(button.dataset.month){const d=new Date(Date.UTC(calendar.year,calendar.month+Number(button.dataset.month),1));if(d.getUTCFullYear()<2000||d.getUTCFullYear()>2100)return;calendar.year=d.getUTCFullYear();calendar.month=d.getUTCMonth();calendar.selected=dayKey(d);refreshCalendar();return;}
   const r=route(),t=r.view==='review'?getTicket(r.id):null;
+  if(button.dataset.removeResource!==undefined&&t){
+    const index=Number(button.dataset.removeResource),d=getDraft(t);
+    if(Number.isInteger(index)&&index>=0&&index<d.resources.length){
+      const [removed]=d.resources.splice(index,1);
+      if(removed.kind==='link')d.body=d.body.replace(`\n\n${removed.label}: ${removed.url}`,'');
+      d.confirmed=false;render();updateApproval(t);
+    }
+    return;
+  }
   if(button.dataset.mode&&t){const d=getDraft(t);d.mode=button.dataset.mode;d.confirmed=false;recipientPage=0;updateRecipients(t);return;}
   if(button.dataset.dmSelection&&t){const d=getDraft(t);d.dmSelection=button.dataset.dmSelection;d.confirmed=false;recipientPage=0;updateRecipients(t);return;}
   if(button.dataset.removeChannel&&t){const d=getDraft(t);d.channels=d.channels.filter(id=>id!==button.dataset.removeChannel);d.confirmed=false;updateRecipients(t);return;}
   if(button.dataset.recipientsPage&&t){recipientPage+=Number(button.dataset.recipientsPage);$('#recipient-list').innerHTML=recipientTable(audience(getProject(t.project),getDraft(t)).list,getProject(t.project));return;}
   switch(button.dataset.action){
+    case 'close-cloud':closeCloudDialog();break;
+    case 'cloud-signout':logoutCloud();break;
+    case 'retry-draft-save':if(t)saveCloudDraft(t);break;
+    case 'load-cloud-draft':if(t){
+      const remote=cloudState[t.id]?.remote;
+      if(remote){applyCloudDraft(t,remote);render();toast('서버 초안을 불러왔어요.');}
+      else toast('서버에서 이 초안을 찾지 못했어요. 내 변경 저장을 선택할 수 있어요.');
+    }break;
+    case 'overwrite-cloud-draft':if(t){
+      const d=getDraft(t),remote=cloudState[t.id]?.remote;
+      d._cloudVersion=remote?.version||0;
+      setCloudState(t,'pending',{remote:null});scheduleCloudSave(t,true);
+    }break;
+    case 'add-resource-link':if(t){
+      const label=$('#resource-label').value.trim(),raw=$('#resource-url').value.trim();let url;
+      try {url=new URL(raw);if(url.protocol!=='https:'||url.username||url.password)throw new Error();}
+      catch {toast('HTTPS 링크 주소를 확인해주세요.');break;}
+      const d=getDraft(t);
+      if(!label){toast('링크 이름을 입력해주세요.');break;}
+      if(d.resources.length>=20){toast('자료는 20개까지 추가할 수 있어요.');break;}
+      d.resources.push({kind:'link',id:crypto.randomUUID(),label,url:url.href});
+      d.body=`${d.body.trimEnd()}\n\n${label}: ${url.href}`;
+      d.confirmed=false;render();updateApproval(t);toast('링크를 본문과 자료 목록에 추가했어요.');
+    }break;
     case 'select-visible-members':document.querySelectorAll('[data-member-row]:not([hidden]) [data-target-member]').forEach(input=>input.checked=true);refreshMemberPicker();break;
     case 'clear-visible-members':document.querySelectorAll('[data-member-row]:not([hidden]) [data-target-member]').forEach(input=>input.checked=false);refreshMemberPicker();break;
     case 'extract-document':findDocumentCandidates();break;
@@ -500,6 +723,7 @@ document.addEventListener('change',async event=>{
     return;
   }
   if(r.view!=='review')return;const t=getTicket(r.id),d=getDraft(t);
+  if(el.id==='resource-file'){const file=el.files?.[0];if(!file)return;if(d.resources.length>=20){toast('자료는 20개까지 추가할 수 있어요.');return;}await uploadNoticeFile(t,file);return;}
   if(el.id==='draft-tone'){d.tone=el.value;d.body=draftText(t,d.tone);d.confirmed=false;$('#draft-body').value=d.body;updateApproval(t);return;}
   if(el.id==='audience-scope')d.scope=el.value;
   else if(el.id==='all-teams')d.teams=el.checked?TEAMS.map(t=>t.id):[];
@@ -514,18 +738,25 @@ document.addEventListener('input',event=>{
   if(event.target.id==='document-source'){documentName='';return;}
   if(event.target.id==='draft-body'){const r=route();if(r.view!=='review')return;const t=getTicket(r.id),d=getDraft(t);d.body=event.target.value;d.confirmed=false;updateApproval(t);}
 });
-document.addEventListener('submit',event=>{if(event.target.id==='history-form')saveHistoryForm(event);if(event.target.id==='new-history-form')saveNewHistoryForm(event);if(event.target.id==='project-form')saveProjectForm(event);if(event.target.id==='cancel-form')saveCancelForm(event);});
+document.addEventListener('submit',event=>{if(event.target.id==='cloud-login-form')loginCloud(event);if(event.target.id==='history-form')saveHistoryForm(event);if(event.target.id==='new-history-form')saveNewHistoryForm(event);if(event.target.id==='project-form')saveProjectForm(event);if(event.target.id==='cancel-form')saveCancelForm(event);});
 $('#history-dialog').addEventListener('cancel',event=>{event.preventDefault();closeHistory();});
 $('#cancel-dialog').addEventListener('cancel',event=>{event.preventDefault();closeCancel();});
 $('#send-preview-dialog').addEventListener('cancel',event=>{event.preventDefault();closeSendPreview();});
+$('#cloud-dialog').addEventListener('cancel',event=>{event.preventDefault();closeCloudDialog();});
 document.addEventListener('input',event=>{if(event.target.id==='cancel-reason')event.target.setCustomValidity('');});
 document.addEventListener('keydown',event=>{
   const tab=event.target.closest('[role=tab]');if(!tab||!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
   event.preventDefault();activeTab=event.key==='Home'?'tickets':event.key==='End'?'history':activeTab==='tickets'?'history':'tickets';render();$(`#${activeTab==='tickets'?'tickets-tab':'sent-tab'}`).focus();
 });
+let previousRoute=route();
 window.addEventListener('hashchange',()=>{
+  if(previousRoute.view==='review'){
+    const previousDraft=drafts[previousRoute.id];
+    if(previousDraft){previousDraft.confirmed=false;previousDraft.confirmedSignature='';}
+  }
+  previousRoute=route();
   if($('#history-dialog').open)closeHistory();if($('#cancel-dialog').open)closeCancel();if($('#send-preview-dialog').open)closeSendPreview();activeTab='tickets';recipientPage=0;recipientSearch='';resetArmed=false;projectFormError='';documentCandidates=[];documentName='';appliedDocumentName='';
-  const r=route();if(r.view==='review')getDraft(getTicket(r.id)).confirmed=false;
   render();window.scrollTo({top:0,behavior:'instant'});$('#content').focus({preventScroll:true});
 });
-restore();render();
+window.addEventListener('focus',()=>{const r=route();if(r.view==='review')refreshCloudDraft(getTicket(r.id));});
+restore();render();initializeCloud();

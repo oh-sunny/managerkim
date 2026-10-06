@@ -1,0 +1,120 @@
+[
+  {
+    "id": "health-2026",
+    "name": "2026 임직원 건강검진",
+    "type": "복지",
+    "target": "재직 중인 검진 대상자 120명",
+    "deadlineAt": "2026-10-23T18:00",
+    "eventDate": "2026-11-30",
+    "confirmationMode": "separate",
+    "applicationUrl": "https://intra.gaonlab.example/welfare/health/2026/apply",
+    "owner": "피플운영팀 박서연",
+    "targetCount": 120,
+    "requiredCount": 30,
+    "appliedCount": 108,
+    "requiredAppliedCount": 25,
+    "noticeMustInclude": [
+      "검진 기관과 희망 일정을 선택",
+      "예약 확정 안내"
+    ],
+    "noticeMustAvoid": [
+      "검진 예약 즉시 확정",
+      "2025년 신청"
+    ],
+    "documents": [
+      "health-policy",
+      "health-booking",
+      "health-update"
+    ]
+  },
+  {
+    "id": "learning-2026q4",
+    "name": "2026년 4분기 자기계발비 지원",
+    "type": "복지",
+    "target": "재직 임직원 중 신청 요건을 충족하는 80명",
+    "deadlineAt": "2026-11-06T18:00",
+    "eventDate": "2026-12-31",
+    "confirmationMode": "separate",
+    "applicationUrl": "https://intra.gaonlab.example/welfare/learning/2026-q4/apply",
+    "owner": "피플운영팀 김유진",
+    "targetCount": 80,
+    "requiredCount": 0,
+    "appliedCount": 30,
+    "requiredAppliedCount": 0,
+    "noticeMustInclude": [
+      "교육 과정과 예상 비용",
+      "검토 후 결과"
+    ],
+    "noticeMustAvoid": [
+      "선착순 자동 승인",
+      "무조건 지원"
+    ],
+    "documents": [
+      "learning-policy",
+      "learning-review",
+      "learning-faq"
+    ]
+  },
+  {
+    "id": "workshop-2026",
+    "name": "2026 가을 워크숍",
+    "type": "행사",
+    "target": "워크숍 초청 동료 100명",
+    "deadlineAt": "2026-10-20T18:00",
+    "eventDate": "2026-11-06",
+    "confirmationMode": "separate",
+    "applicationUrl": "https://intra.gaonlab.example/events/autumn-workshop-2026/rsvp",
+    "owner": "컬처팀 이지훈",
+    "targetCount": 100,
+    "requiredCount": 12,
+    "appliedCount": 51,
+    "requiredAppliedCount": 9,
+    "noticeMustInclude": [
+      "참석 가능 여부",
+      "좌석 확정 안내"
+    ],
+    "noticeMustAvoid": [
+      "10월 18일 마감",
+      "신청 즉시 참석 확정"
+    ],
+    "obsoleteDeadlines": [
+      "2026-10-18"
+    ],
+    "obsoleteUrls": [
+      "https://intra.gaonlab.example/events/autumn-workshop-2026/old-rsvp"
+    ],
+    "documents": [
+      "workshop-plan",
+      "workshop-logistics",
+      "workshop-rsvp-update"
+    ]
+  },
+  {
+    "id": "photo-2026",
+    "name": "2026 사내 사진 공모전",
+    "type": "이벤트",
+    "target": "재직 임직원 80명",
+    "deadlineAt": "2026-10-30T18:00",
+    "eventDate": "2026-11-12",
+    "confirmationMode": "immediate",
+    "applicationUrl": "https://intra.gaonlab.example/events/photo-2026/submit",
+    "owner": "컬처팀 최민지",
+    "targetCount": 80,
+    "requiredCount": 0,
+    "appliedCount": 0,
+    "requiredAppliedCount": 0,
+    "noticeMustInclude": [
+      "사진 1점과 설명",
+      "제출 완료 화면"
+    ],
+    "noticeMustAvoid": [
+      "참여 필수",
+      "모든 사진을 사외 홍보에 사용"
+    ],
+    "documents": [
+      "photo-plan",
+      "photo-submit",
+      "photo-rights"
+    ]
+  }
+]
