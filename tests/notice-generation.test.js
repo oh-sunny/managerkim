@@ -36,7 +36,7 @@ test('public holiday adapter needs no key and accepts only nationwide public hol
     {date:'2026-10-10',global:true,types:['Observance']},
     {date:'2026-10-11',global:false,types:['Public']},
   ];
-  const calendar=createPublicHolidayCalendar({fetcher:async url=>{assert.match(String(url),/PublicHolidays\/2026\/KR$/);return Response.json(entries);}});
+  const calendar=createPublicHolidayCalendar({fetcher:async url=>{assert.match(String(url),/publicholidays\/2026\/KR$/);return Response.json(entries);}});
   const result=await calendar.get([2026]);
   assert.deepEqual(result.holidays,['2026-10-09']);
   assert.equal(result.status,'success');

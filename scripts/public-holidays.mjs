@@ -1,4 +1,4 @@
-const endpoint='https://date.nager.at/api/v3/PublicHolidays';
+const endpoint='https://nagerholidays.com/api/v3/publicholidays';
 const cacheDurationMs=6*60*60*1000;
 
 export function createPublicHolidayCalendar({fetcher=fetch}={}) {

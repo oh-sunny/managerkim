@@ -318,6 +318,7 @@ function setCloudState(t,status,extra={}) {
 }
 function applyCloudDraft(t,record) {
   const d=getDraft(t),source=record.payload||{};
+  noticeStates.delete(t.id);
   for(const field of ['body','purpose','tone','mode','scope','teams','dmSelection','selectedIds','channels','resources','brief','briefStale','generatedAt','generatedModel'])if(source[field]!==undefined)d[field]=structuredClone(source[field]);
   d._cloudVersion=record.version;d._cloudDirty=false;d._cloudRevision=0;
   d.confirmed=false;d.confirmedSignature='';
@@ -842,6 +843,8 @@ async function simulateSend(t) {
   }
   const route=d.mode==='dm'?`DM · 동료 ${a.list.length}명 · ${d.dmSelection==='people'?'개별 선택':d.teams.length===TEAMS.length?'전체 팀':d.teams.map(id=>TEAMS.find(t=>t.id===id).name).join('·')}`:`${a.channels.map(c=>c.name).join(' · ')} · 게시 ${a.channels.length}건`;
   records.push({id,project:t.project,ticket:t.id,title:t.title,date:checkedAt(),route,body:d.body,url:'',source:'simulated',kind:recordKind({title:t.title,ticket:t.id}),recipientIds:d.mode==='dm'?a.list.map(e=>e.id):[],channelIds:d.mode==='channel'?a.channels.map(c=>c.id):[],resources:structuredClone(d.resources||[])});
+  records.at(-1).purpose=d.purpose;
+  records.at(-1).kind=d.purpose==='initial'?'initial':'reminder';
   clearTimeout(cloudTimers.get(t.id));delete cloudState[t.id];
   completed[t.id]=id;delete drafts[t.id];noticeStates.delete(t.id);const saved=persist();activeTab='tickets';location.hash=`project/${t.project}`;
   if(saved)toast('안내 보내기를 완료했어요 (예시). 이 티켓의 원문을 기록했어요.');
@@ -878,6 +881,7 @@ document.addEventListener('click',event=>{
   if(button.dataset.dmSelection&&t){const d=getDraft(t);d.dmSelection=button.dataset.dmSelection;d.confirmed=false;recipientPage=0;updateRecipients(t);return;}
   if(button.dataset.removeChannel&&t){const d=getDraft(t);d.channels=d.channels.filter(id=>id!==button.dataset.removeChannel);d.confirmed=false;updateRecipients(t);return;}
   if(button.dataset.recipientsPage&&t){recipientPage+=Number(button.dataset.recipientsPage);$('#recipient-list').innerHTML=recipientTable(audience(getProject(t.project),getDraft(t)).list,getProject(t.project));return;}
+  if(button.dataset.action==='reset-sample'&&resetArmed)noticeStates.clear();
   switch(button.dataset.action){
     case 'close-cloud':closeCloudDialog();break;
     case 'retry-operator-state':operatorSaveStatus='pending';operatorConflict=null;void saveOperatorState();closeCloudDialog();break;
