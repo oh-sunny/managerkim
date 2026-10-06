@@ -5,6 +5,8 @@ import { createSupabaseApi } from './supabase-api.mjs';
 import { createDocumentAnalyzer } from './document-analysis.mjs';
 import { createNoticeGenerator } from './notice-generation.mjs';
 import { createPublicHolidayCalendar } from './public-holidays.mjs';
+import { createGoogleSheetsService } from './google-sheets-service.mjs';
+import { DEFAULT_GEMINI_MODEL } from './gemini-config.mjs';
 
 function localEnv() {
   try {
@@ -19,9 +21,14 @@ const env=localEnv();
 const handleApi=createSupabaseApi({
   url:process.env.SUPABASE_URL||env.SUPABASE_URL,
   key:process.env.SUPABASE_PUBLISHABLE_KEY||env.SUPABASE_PUBLISHABLE_KEY,
-  analyzer:createDocumentAnalyzer({apiKey:process.env.GEMINI_API_KEY||env.GEMINI_API_KEY,model:process.env.GEMMA_MODEL||env.GEMMA_MODEL}),
-  noticeGenerator:createNoticeGenerator({apiKey:process.env.GEMINI_API_KEY||env.GEMINI_API_KEY,model:process.env.GEMMA_MODEL||env.GEMMA_MODEL}),
+  analyzer:createDocumentAnalyzer({apiKey:process.env.GEMINI_API_KEY||env.GEMINI_API_KEY,model:process.env.GEMINI_MODEL||env.GEMINI_MODEL||DEFAULT_GEMINI_MODEL}),
+  noticeGenerator:createNoticeGenerator({apiKey:process.env.GEMINI_API_KEY||env.GEMINI_API_KEY,model:process.env.GEMINI_MODEL||env.GEMINI_MODEL||DEFAULT_GEMINI_MODEL}),
   holidayCalendar:createPublicHolidayCalendar(),
+  sheetService:createGoogleSheetsService({
+    spreadsheetId:process.env.GOOGLE_SHEETS_SPREADSHEET_ID||env.GOOGLE_SHEETS_SPREADSHEET_ID,
+    clientEmail:process.env.GOOGLE_SHEETS_CLIENT_EMAIL||env.GOOGLE_SHEETS_CLIENT_EMAIL,
+    privateKey:process.env.GOOGLE_SHEETS_PRIVATE_KEY||env.GOOGLE_SHEETS_PRIVATE_KEY,
+  }),
 });
 
 const assets = new Map([

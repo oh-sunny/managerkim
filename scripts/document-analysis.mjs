@@ -3,6 +3,7 @@ import { GoogleGenAI } from '@google/genai';
 import { ANALYSIS_FIELDS, applicableValue } from '../prototype/analysis-contract.js';
 import { extractProjectCandidates } from '../prototype/document-extract.js';
 import { readDocuments, applyOcr, analysisError } from './document-reader.mjs';
+import { isGeminiModel, thinkingConfigFor } from './gemini-config.mjs';
 
 const compact = text => String(text).replace(/\s+/g,' ').trim();
 const modelError = (message, code) => Object.assign(analysisError(message,502),{code});
@@ -75,13 +76,13 @@ export function validateAnalysis(raw, sources, excerpts=[]) {
 }
 
 export function createDocumentAnalyzer({ apiKey='', model='', generate, reader=readDocuments, onDiagnostic=event=>console.warn('[document-analysis]',JSON.stringify(event)) } = {}) {
-  const configured = Boolean(apiKey && /^gemma-[a-z0-9-]+$/.test(model));
+  const configured = Boolean(apiKey && isGeminiModel(model));
   const client = configured && !generate ? new GoogleGenAI({ apiKey, httpOptions:{ timeout:65_000, retryOptions:{ attempts:1 } } }) : null;
   const run = generate || (request => client.models.generateContent(request));
   return {
     configured,
     async analyze(input) {
-      if (!configured) throw analysisError('서버에 Gemma API 키와 모델을 설정해주세요.',503);
+      if (!configured) throw analysisError('서버에 Gemini API 키와 모델을 설정해주세요.',503);
       const started = Date.now(), deadline = started + 140_000;
       let retryUsed = false;
       const { sources, images } = await reader(input);
@@ -90,7 +91,7 @@ export function createDocumentAnalyzer({ apiKey='', model='', generate, reader=r
           for (let attempt=0; attempt<2; attempt++) {
             const remaining = deadline-Date.now();
             if (remaining <= 0) throw analysisError('자료 분석 시간이 초과됐습니다. 자료를 나눠 다시 분석해주세요.',504);
-            const result = await run({ model, contents, config:{ systemInstruction:systemInstruction+(attempt ? '\n이전 응답의 JSON 형식 오류로 다시 요청합니다. 원본 자료에서 다시 추출하세요. 설명·마크다운 없이 완결된 JSON 객체 하나만 반환하세요. 문자열 안의 줄바꿈과 큰따옴표를 JSON 규칙대로 이스케이프하세요. 중복 근거를 줄이고 간결하게 작성하세요.' : ''), temperature:0, maxOutputTokens:stage==='ocr'?12000:5000, thinkingConfig:{ thinkingLevel:'minimal' }, httpOptions:{timeout:Math.min(65_000,remaining)} } });
+            const result = await run({ model, contents, config:{ systemInstruction:systemInstruction+(attempt ? '\n이전 응답의 JSON 형식 오류로 다시 요청합니다. 원본 자료에서 다시 추출하세요. 설명·마크다운 없이 완결된 JSON 객체 하나만 반환하세요. 문자열 안의 줄바꿈과 큰따옴표를 JSON 규칙대로 이스케이프하세요. 중복 근거를 줄이고 간결하게 작성하세요.' : ''), temperature:0, maxOutputTokens:stage==='ocr'?12000:8192, thinkingConfig:thinkingConfigFor(model,stage), httpOptions:{timeout:Math.min(65_000,remaining)} } });
             const finishReason = result.candidates?.[0]?.finishReason;
             const text = result.text;
             try {
@@ -108,8 +109,8 @@ export function createDocumentAnalyzer({ apiKey='', model='', generate, reader=r
         } catch (error) {
           if (error.publicMessage) throw error;
           onDiagnostic({stage,code:'MODEL_REQUEST',status:Number.isInteger(error.status)?error.status:null,elapsedMs:Date.now()-started});
-          const messages = { 400:'Gemma가 요청을 처리하지 못했습니다. 모델의 이미지·설정 지원 여부를 확인해주세요.',401:'Gemma API 인증을 확인해주세요.',402:'Gemma 선불 크레딧이 소진됐습니다. Google AI Studio 결제 상태를 확인해주세요.',403:'Gemma API 사용 권한을 확인해주세요.',404:'설정한 Gemma 모델을 사용할 수 없습니다.',408:'Gemma 응답 대기 시간이 초과됐습니다. 잠시 후 다시 분석해주세요.',504:'Gemma 응답 대기 시간이 초과됐습니다. 잠시 후 다시 분석해주세요.',429:'Gemma 요청 한도에 도달했습니다. 잠시 후 다시 시도해주세요.' };
-          throw analysisError(messages[error.status] || 'Gemma 응답을 받지 못했습니다. 잠시 후 다시 시도해주세요.', [402,429].includes(error.status) ? error.status : 502);
+          const messages = { 400:'Gemini가 요청을 처리하지 못했습니다. 모델의 이미지·설정 지원 여부를 확인해주세요.',401:'Gemini API 인증을 확인해주세요.',402:'Gemini 결제 상태를 확인해주세요.',403:'Gemini API 사용 권한을 확인해주세요.',404:'설정한 Gemini 모델을 사용할 수 없습니다.',408:'Gemini 응답 대기 시간이 초과됐습니다. 잠시 후 다시 분석해주세요.',504:'Gemini 응답 대기 시간이 초과됐습니다. 잠시 후 다시 분석해주세요.',429:'Gemini 요청 한도에 도달했습니다. 잠시 후 다시 시도해주세요.' };
+          throw analysisError(messages[error.status] || 'Gemini 응답을 받지 못했습니다. 잠시 후 다시 시도해주세요.', [402,429].includes(error.status) ? error.status : 502);
         }
       };
       if (images.length) {

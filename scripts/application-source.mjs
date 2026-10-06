@@ -84,6 +84,7 @@ export function normalizeApplicationSource({targetRows, eventRows, knownEmployee
       status:row.status,
       occurredAt:timestamp(row.occurredAt, context),
     };
+    if(typeof row.reason==='string'&&row.reason.trim())event.reason=row.reason.trim().slice(0,500);
     if (!projects.has(event.projectId)) invalid('UNKNOWN_PROJECT_ID', `${context}: 알 수 없는 프로젝트 ID입니다.`);
     if (!employees.has(event.employeeId)) invalid('UNKNOWN_EMPLOYEE_ID', `${context}: 알 수 없는 동료 ID입니다.`);
     if (!STATUSES.has(event.status)) invalid('UNKNOWN_STATUS', `${context}: 알 수 없는 신청 상태입니다.`);

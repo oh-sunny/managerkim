@@ -61,9 +61,9 @@ test('incomplete dates, invalid dates and unsafe URLs cannot fill operating fiel
 });
 
 test('model failures and invalid JSON return safe actionable errors without exposing credentials',async()=>{
-  const analyzer=createDocumentAnalyzer({apiKey:'test-secret',model:'gemma-test',generate:async()=>{throw Object.assign(new Error('test-secret in request'),{status:402});}});
+  const analyzer=createDocumentAnalyzer({apiKey:'test-secret',model:'gemini-3.8-flash',generate:async()=>{throw Object.assign(new Error('test-secret in request'),{status:402});}});
   await assert.rejects(analyzer.analyze(input([textFile('a.txt','행사명: 샘플')])),error=>error.status===402&&!error.message.includes('test-secret'));
-  const malformed=createDocumentAnalyzer({apiKey:'test',model:'gemma-test',generate:async()=>({text:'not JSON'})});
+  const malformed=createDocumentAnalyzer({apiKey:'test',model:'gemini-3.8-flash',generate:async()=>({text:'not JSON'})});
   await assert.rejects(malformed.analyze(input([textFile('a.txt','행사명: 샘플')])),/응답 형식/);
 });
 
@@ -78,9 +78,10 @@ test('accepts a complete JSON object with Markdown/prose but rejects ambiguous o
 test('retries malformed output once using original documents and still rejects invented evidence',async()=>{
   const requests=[],diagnostics=[];
   const valid={fields:[{field:'name',options:[{value:'샘플',evidence:[{sourceId:'source-1',segmentId:'source-1-s1',quote:'행사명: 샘플'}]}]},{field:'owner',options:[{value:'없는 담당자',evidence:[{sourceId:'source-1',segmentId:'source-1-s1',quote:'없는 근거'}]}]}]};
-  const analyzer=createDocumentAnalyzer({apiKey:'test-secret',model:'gemma-test',onDiagnostic:e=>diagnostics.push(e),generate:async request=>{requests.push(request);return {text:requests.length===1?'invalid secret output':JSON.stringify(valid),candidates:[{finishReason:'STOP'}]};}});
+  const analyzer=createDocumentAnalyzer({apiKey:'test-secret',model:'gemini-3.8-flash',onDiagnostic:e=>diagnostics.push(e),generate:async request=>{requests.push(request);return {text:requests.length===1?'invalid secret output':JSON.stringify(valid),candidates:[{finishReason:'STOP'}]};}});
   const result=await analyzer.analyze(input([textFile('a.txt','행사명: 샘플')]));
   assert.equal(requests.length,2);assert.deepEqual(requests[0].contents,requests[1].contents);
+  assert.deepEqual(requests[0].config.thinkingConfig,{thinkingLevel:'low'});
   assert.match(requests[1].config.systemInstruction,/이전 응답/);
   assert.ok(requests[1].config.httpOptions.timeout<=65000);
   assert.equal(result.fields.find(f=>f.field==='name').options[0].value,'샘플');
@@ -92,7 +93,7 @@ test('retries malformed output once using original documents and still rejects i
 test('never accepts a truncated or blocked response even if its text is valid JSON',async()=>{
   for (const [reason,code,calls] of [['MAX_TOKENS','MODEL_TRUNCATED',2],['SAFETY','MODEL_BLOCKED',1]]) {
     let count=0;
-    const analyzer=createDocumentAnalyzer({apiKey:'test',model:'gemma-test',onDiagnostic:()=>{},generate:async()=>{count++;return {text:'{"fields":[{"field":"name","options":[]}]}',candidates:[{finishReason:reason}]};}});
+    const analyzer=createDocumentAnalyzer({apiKey:'test',model:'gemini-3.8-flash',onDiagnostic:()=>{},generate:async()=>{count++;return {text:'{"fields":[{"field":"name","options":[]}]}',candidates:[{finishReason:reason}]};}});
     await assert.rejects(analyzer.analyze(input([textFile('a.txt','행사명: 샘플')])),error=>error.code===code);
     assert.equal(count,calls);
   }
@@ -100,7 +101,7 @@ test('never accepts a truncated or blocked response even if its text is valid JS
 
 test('OCR and extraction share one retry budget for the whole analysis',async()=>{
   let count=0;
-  const analyzer=createDocumentAnalyzer({apiKey:'test',model:'gemma-test',onDiagnostic:()=>{},reader:async()=>({sources:[{id:'source-1',name:'a.pdf',segments:[],warnings:[]}],images:[{id:'source-1-p1',sourceId:'source-1',page:1,data:''}]}),generate:async()=>{count++;return {text:count===2?JSON.stringify({pages:[{id:'source-1-p1',text:'행사명: 샘플'}]}):'invalid'};}});
+  const analyzer=createDocumentAnalyzer({apiKey:'test',model:'gemini-3.8-flash',onDiagnostic:()=>{},reader:async()=>({sources:[{id:'source-1',name:'a.pdf',segments:[],warnings:[]}],images:[{id:'source-1-p1',sourceId:'source-1',page:1,data:''}]}),generate:async()=>{count++;return {text:count===2?JSON.stringify({pages:[{id:'source-1-p1',text:'행사명: 샘플'}]}):'invalid'};}});
   await assert.rejects(analyzer.analyze(input([])),error=>error.code==='MODEL_JSON');
   assert.equal(count,3);
 });

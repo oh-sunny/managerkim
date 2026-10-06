@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {normalizeApplicationSource, tryNormalizeApplicationSource} from '../scripts/application-source.mjs';
-import {mapSheetRows, readGoogleSheetsApplicationSource} from '../scripts/google-sheets-source.mjs';
+import {mapSheetRows, readGoogleSheetsApplicationSource, readGoogleSheetsWorkspaceSource} from '../scripts/google-sheets-source.mjs';
 import {calculateStatus} from '../prototype/data.js';
 
 const base = {
@@ -110,4 +110,30 @@ test('missing or duplicated Sheet headers are rejected', () => {
   assert.throws(() => mapSheetRows([['projectId', 'employeeId']], ['projectId', 'employeeId', 'required']),
     {code:'INVALID_SHEET_HEADER'});
   assert.throws(() => mapSheetRows([['projectId', 'projectId']], ['projectId']), {code:'INVALID_SHEET_HEADER'});
+});
+
+test('four-tab Google Sheet joins a company directory to project targets and preserves KST history', async () => {
+  let requestedRanges;
+  const result=await readGoogleSheetsWorkspaceSource({spreadsheetId:'sheet-id',accessToken:'token',
+    now:()=>new Date('2026-10-06T00:00:00Z'),fetchImpl:async url=>{
+      requestedRanges=new URL(url).searchParams.getAll('ranges');
+      return {ok:true,json:async()=>({valueRanges:[
+        {values:[['employeeId','사번','이름','회사 이메일','본부','팀','직급','직책','고용 형태','재직 상태','입사일','근무지','관리자 사번'],
+          ['1','EMP-0001','김서연','employee0001@example.com','사업본부','마케팅팀','부장','팀장','정규직','재직','2017-01-01','서울 본사',''],
+          ['2','EMP-0002','김지훈','employee0002@example.com','제품본부','개발팀','대리','팀원','정규직','재직','2020-01-02','판교 오피스','EMP-0001']]},
+        {values:[['projectId','프로젝트명'],['health','연례 건강검진']]},
+        {values:[['projectId','employeeId','required'],['health','1','TRUE'],['health','2','FALSE']]},
+        {values:[['sourceEventId','projectId','employeeId','status','occurredAt','사유 (참고)'],
+          ['H-001','health','1','applied','2026-10-01 09:10:00 KST','첫 신청'],
+          ['H-002','health','1','cancelled','2026-10-02 10:00:00 KST','본인 요청'],
+          ['H-003','health','1','confirmed','2026-10-03 11:00:00 KST','재신청']]},
+      ]})};
+    }});
+  assert.deepEqual(requestedRanges,['직원명부!A:M','프로젝트!A:H','대상!A:G','신청이력!A:I']);
+  assert.equal(result.employees.length,2);
+  assert.equal(result.employees[0].employeeNumber,'EMP-0001');
+  assert.deepEqual(result.projectTargets[0].requiredIds,[1]);
+  assert.deepEqual(result.events.map(row=>row.reason),['첫 신청','본인 요청','재신청']);
+  assert.equal(result.events[0].occurredAt,'2026-10-01T00:10:00.000Z');
+  assert.equal(result.applications[0].status,'confirmed');
 });

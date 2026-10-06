@@ -66,6 +66,19 @@ test('configured API requires authentication and rejects cross-origin mutations'
   assert.equal(rejected.status,403);
 });
 
+test('Google Sheet sync is authenticated and does not return data when the source fails',async()=>{
+  let readCount=0;
+  const sheetService={configured:true,spreadsheetId:'sheet-id',read:async()=>{readCount++;return {employees:[{id:1}],sync:{status:'success'}};}};
+  const handler=createSupabaseApi({...config,sheetService,fetcher:async()=>response({id:'user-1'})});
+  assert.deepEqual((await call(handler,'/api/sheets/status')).body,{configured:true,spreadsheetId:'sheet-id'});
+  assert.equal((await call(handler,'/api/sheets/sync',{method:'POST'})).status,401);
+  const synced=await call(handler,'/api/sheets/sync',{method:'POST',headers:cookie});
+  assert.equal(synced.status,200);assert.equal(synced.body.employees[0].id,1);assert.equal(readCount,1);
+  sheetService.read=async()=>{throw new Error('private-token');};
+  const failed=await call(handler,'/api/sheets/sync',{method:'POST',headers:cookie});
+  assert.equal(failed.status,502);assert.doesNotMatch(failed.body.error,/private-token/);
+});
+
 test('Vercel HTTPS origin and parsed JSON body are accepted',async()=>{
   const handler=createSupabaseApi({...config,fetcher:async(url,options)=>{
     if(url.endsWith('/auth/v1/token?grant_type=password')){

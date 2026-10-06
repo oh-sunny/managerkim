@@ -7,7 +7,7 @@
 
 ## 0. 현재 구현한 자료 분석 경로 (2026-10-06)
 
-현재 구현은 **브라우저 파일/텍스트 → 인증된 POST /api/documents/analyze → 서버 형식별 추출 → 필요한 PDF 페이지의 Gemma OCR → Gemma 통합 분석 → 원문 근거 검사 → 후보 카드 검토·선택 적용 → 프로젝트 Supabase 저장 → 공지 정보 카드 수정·제외 → Gemma 초안 생성**이다. Gemma는 Gemini API를 통해 호출하며 GEMINI_API_KEY·GEMMA_MODEL은 서버 환경 변수다. 로컬 서버와 Vercel API가 같은 분석 모듈을 사용한다.
+현재 구현은 **브라우저 파일/텍스트 → 인증된 POST /api/documents/analyze → 서버 형식별 추출 → 필요한 PDF 페이지의 Gemini OCR → Gemini 통합 분석 → 원문 근거 검사 → 후보 카드 검토·선택 적용 → 프로젝트 Supabase 저장 → 공지 정보 카드 수정·제외 → Gemini 초안 생성**이다. Gemini는 Gemini API를 통해 호출하며 GEMINI_API_KEY·GEMINI_MODEL은 서버 환경 변수다. 로컬 서버와 Vercel API가 같은 분석 모듈을 사용한다.
 
 원본과 전체 분석 결과를 Supabase에 저장하는 아래 설계는 아직 목표 구조다. 이번 구현에서는 원본·페이지 이미지·전체 텍스트를 요청 메모리에서 처리하고, 적용한 값과 근거·파일 해시·시각·모델만 프로젝트 sourceReviews에 저장한다. 프로젝트는 계정별 `operator_states`에 저장하고 변경 시점의 스냅샷을 `operator_state_revisions`에 남긴다. 업로드 자료는 기존 notice-files/notice_resources 안내 첨부와 별개이며 자동으로 발송용 자료가 되지 않는다.
 
@@ -64,7 +64,7 @@ Gemini는 입력 내용을 해석해 후보를 반환하거나, 확정된 정보
 | 텍스트 붙여넣기와 파일 입력 후보 | 붙여넣은 글 또는 `.txt`·`.md` 파일을 브라우저에서 규칙으로 추출하고 적용 전에는 메모리에만 보관 | `project_inputs`, `input_analyses`, `field_candidates` |
 | PDF·DOCX 등 파일 원본 | 요청 중 분석만 지원, 원본 보관 없음 | 비공개 Storage 버킷과 `project_inputs`의 파일 메타데이터 |
 | 티켓·캘린더 | 예시 티켓과 규칙 티켓을 화면에 표시, 공개 공휴일 달력 조회, 운영 상태는 `operator_states`에 저장 | 실제 신청 원본·주기 실행에서 생성·갱신한 점검 일정과 티켓 |
-| 초안·승인 | 수정 가능한 공지 카드와 Gemma 초안을 `notice_drafts`에 저장. 확인 체크는 저장·복원하지 않음 | 확정 정보·최신 현황·이전 안내를 반영한 초안 버전과 입력 근거. 실제 실행에 사용한 승인 사건만 감사 이력으로 기록 |
+| 초안·승인 | 수정 가능한 공지 카드와 Gemini 초안을 `notice_drafts`에 저장. 확인 체크는 저장·복원하지 않음 | 확정 정보·최신 현황·이전 안내를 반영한 초안 버전과 입력 근거. 실제 실행에 사용한 승인 사건만 감사 이력으로 기록 |
 | 안내 기록·모의 발송 | `records`, `completed`와 선택 자료를 계정별 `operator_states`에 저장 | 실제 발송 시도·대상별 결과·원문·외부 링크, 수동 기록 분리 |
 | 실제 Slack·서버 주기 실행 | 미지원 | 서버 측 발송 기능·작업 실행 이력 |
 

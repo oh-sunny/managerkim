@@ -53,7 +53,7 @@ const validDraft = data => data && typeof data==='object' && !Array.isArray(data
     data.brief[key] && typeof data.brief[key].value==='string' && data.brief[key].value.length<=2000 &&
     typeof data.brief[key].included==='boolean' && typeof data.brief[key].source==='string'));
 
-export function createSupabaseApi({url='',key='',fetcher=fetch,analyzer=null,noticeGenerator=null,holidayCalendar=null}={}) {
+export function createSupabaseApi({url='',key='',fetcher=fetch,analyzer=null,noticeGenerator=null,holidayCalendar=null,sheetService=null}={}) {
   const analyzing = new Set();
   const generating = new Set();
   let base='';
@@ -102,6 +102,9 @@ export function createSupabaseApi({url='',key='',fetcher=fetch,analyzer=null,not
   return async function handleApi(req,res,pathname) {
     try {
       if(pathname==='/api/status' && req.method==='GET'){json(res,200,{configured});return;}
+      if(pathname==='/api/sheets/status' && req.method==='GET'){
+        json(res,200,{configured:sheetService?.configured===true,spreadsheetId:sheetService?.spreadsheetId||null});return;
+      }
       if(!configured){json(res,503,{error:'서버 환경 변수 SUPABASE_URL과 SUPABASE_PUBLISHABLE_KEY를 설정해주세요.'});return;}
       if(req.method!=='GET' && req.method!=='HEAD'){
         const origin=req.headers.origin;
@@ -129,6 +132,13 @@ export function createSupabaseApi({url='',key='',fetcher=fetch,analyzer=null,not
       if(!auth){json(res,401,{error:'Supabase 계정으로 로그인해주세요.'});return;}
       if(pathname==='/api/auth/session' && req.method==='GET'){
         json(res,200,{user:{id:auth.user.id,email:auth.user.email}});return;
+      }
+      if(pathname==='/api/sheets/sync'){
+        if(req.method!=='POST'){json(res,405,{error:'POST 요청을 사용해주세요.'});return;}
+        if(!sheetService?.configured){json(res,503,{error:'Google Sheets 읽기 계정과 스프레드시트 ID를 서버에 설정해주세요.'});return;}
+        try{json(res,200,await sheetService.read());}
+        catch(error){json(res,502,{error:error?.code?error.message:'Google Sheets를 읽지 못했습니다. 시트 공유 권한과 서버 설정을 확인해주세요.'});}
+        return;
       }
       if(pathname==='/api/state'){
         if(req.method==='GET'){json(res,200,{state:await currentState(auth.token)});return;}
@@ -158,7 +168,7 @@ export function createSupabaseApi({url='',key='',fetcher=fetch,analyzer=null,not
       }
       if(pathname==='/api/notices/generate'){
         if(req.method!=='POST'){json(res,405,{error:'POST 요청을 사용해주세요.'});return;}
-        if(!noticeGenerator?.configured){json(res,503,{error:'Gemma API 키와 모델을 설정해주세요.'});return;}
+        if(!noticeGenerator?.configured){json(res,503,{error:'Gemini API 키와 모델을 설정해주세요.'});return;}
         if(!String(req.headers['content-type']||'').includes('application/json')){json(res,415,{error:'JSON 요청이 필요합니다.'});return;}
         if(generating.has(auth.user.id)){json(res,429,{error:'이미 초안을 생성하고 있습니다. 결과를 기다려주세요.'});return;}
         generating.add(auth.user.id);
@@ -172,7 +182,7 @@ export function createSupabaseApi({url='',key='',fetcher=fetch,analyzer=null,not
       }
       if(pathname==='/api/documents/analyze'){
         if(req.method!=='POST'){json(res,405,{error:'POST 요청을 사용해주세요.'});return;}
-        if(!analyzer?.configured){json(res,503,{error:'서버에 Gemma API 키와 모델을 설정해주세요.'});return;}
+        if(!analyzer?.configured){json(res,503,{error:'서버에 Gemini API 키와 모델을 설정해주세요.'});return;}
         if(!String(req.headers['content-type']||'').includes('application/json')){json(res,415,{error:'JSON 요청이 필요합니다.'});return;}
         if(analyzing.has(auth.user.id)){json(res,429,{error:'이미 자료를 분석하고 있습니다. 결과를 기다려주세요.'});return;}
         analyzing.add(auth.user.id);

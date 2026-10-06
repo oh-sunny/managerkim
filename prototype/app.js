@@ -27,7 +27,8 @@ let PROJECTS = [
 const TEAMS = [{id:'marketing',name:'마케팅팀'},{id:'engineering',name:'개발팀'},{id:'operations',name:'운영팀'},{id:'design',name:'디자인팀'}];
 const SAMPLE_FAMILY_NAMES=['김','이','박','최','정','강','조','윤'];
 const SAMPLE_GIVEN_NAMES=['서연','지훈','민지','도윤','하은','시우','유진','현우','지민','수빈','예준','서윤','주원','다은','태윤','가은','준서','채원','민준','지아'];
-const EMPLOYEES = Array.from({length:160},(_,i)=>({id:i+1,name:`${SAMPLE_FAMILY_NAMES[Math.floor(i/20)]}${SAMPLE_GIVEN_NAMES[i%20]} (예시)`,team:TEAMS[i%4].id}));
+let EMPLOYEES = Array.from({length:160},(_,i)=>({id:i+1,name:`${SAMPLE_FAMILY_NAMES[Math.floor(i/20)]}${SAMPLE_GIVEN_NAMES[i%20]} (예시)`,team:TEAMS[i%4].id}));
+const INITIAL_EMPLOYEES=structuredClone(EMPLOYEES);
 const INITIAL_PROJECTS = structuredClone(PROJECTS).map(p=>({
   ...p, start:'2026-09-01', deadlineAt:`${p.deadline}T18:00`, applicationUrl:'',
   confirmationMode:'immediate', targetIds:EMPLOYEES.slice(0,p.total).map(e=>e.id),
@@ -88,6 +89,10 @@ let appliedDocumentName = '';
 let appliedFieldReviews = {};
 let disposeDocumentImport = null;
 let resetArmed = false;
+let sheetSourceStatus = {configured:false,spreadsheetId:null};
+let sheetSync = null;
+let sheetSyncBusy = false;
+let sheetSyncError = '';
 let officialCalendar = null;
 let holidayError = '';
 let operatorVersion = 0;
@@ -134,11 +139,17 @@ function validRecord(r) {
 function restore() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (!saved || ![1,2,3,4,5].includes(saved.version)) return;
+    if (!saved || ![1,2,3,4,5,6].includes(saved.version)) return;
     if(saved.operatorOwnerId&&saved.operatorOwnerId!==cloudUser?.id)return;
     operatorOwnerId=saved.operatorOwnerId||null;
     operatorVersion=Number.isInteger(saved.operatorVersion)?saved.operatorVersion:0;
     operatorDirty=saved.operatorDirty===true||saved.version<5;
+    if(saved.version>=6&&Array.isArray(saved.employees)){
+      const knownTeams=new Set(TEAMS.map(team=>team.id));
+      const valid=saved.employees.filter(e=>e&&Number.isSafeInteger(e.id)&&e.id>0&&typeof e.name==='string'&&e.name.trim()&&knownTeams.has(e.team));
+      if(valid.length&&valid.length<=5000&&new Set(valid.map(e=>e.id)).size===valid.length)EMPLOYEES=valid;
+    }
+    if(saved.version>=6&&saved.sheetSync&&typeof saved.sheetSync==='object')sheetSync=saved.sheetSync;
     if(saved.version>=5&&Array.isArray(saved.tickets))TICKETS=saved.tickets.filter(t=>t&&typeof t.id==='string'&&typeof t.project==='string'&&typeof t.title==='string'&&typeof t.date==='string'&&['pending','scheduled','deferred','dismissed','retired','done'].includes(t.state)).slice(0,1000);
     if (saved.version>=2 && Array.isArray(saved.projects) && Array.isArray(saved.applications)) {
       const validProjects=saved.projects.filter(p=>p && typeof p.id==='string' && /^[a-z0-9-]+$/.test(p.id) && typeof p.name==='string' && p.name.trim() && typeof p.description==='string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(p.deadlineAt||'') && !Number.isNaN(Date.parse(p.deadlineAt)) && /^\d{4}-\d{2}-\d{2}$/.test(p.event||'') && Array.isArray(p.targetIds) && Array.isArray(p.requiredIds) && ['immediate','separate'].includes(p.confirmationMode));
@@ -190,12 +201,12 @@ function restore() {
     }
   } catch { /* Storage is optional; retain usable defaults. */ }
 }
-function operatorPayload(){return {schemaVersion:1,projects:PROJECTS,applications,applicationEvents,records,tickets:TICKETS,completed};}
+function operatorPayload(){return {schemaVersion:2,employees:EMPLOYEES,sheetSync,projects:PROJECTS,applications,applicationEvents,records,tickets:TICKETS,completed};}
 function persist({remote=true}={}) {
   try {
     const savedDrafts=Object.fromEntries(Object.entries(drafts).map(([id,{confirmed,confirmedSignature,...draft}])=>[id,draft]));
     if(remote){operatorDirty=true;operatorRevision++;if(cloudUser)scheduleOperatorSave();}
-    localStorage.setItem(STORAGE_KEY,JSON.stringify({version:5,projects:PROJECTS,applications,applicationEvents,records,tickets:TICKETS,completed,calendar,drafts:savedDrafts,operatorOwnerId,operatorVersion,operatorDirty}));
+    localStorage.setItem(STORAGE_KEY,JSON.stringify({version:6,employees:EMPLOYEES,sheetSync,projects:PROJECTS,applications,applicationEvents,records,tickets:TICKETS,completed,calendar,drafts:savedDrafts,operatorOwnerId,operatorVersion,operatorDirty}));
     renderCloudButton();
     return true;
   }
@@ -226,6 +237,8 @@ async function saveOperatorState(){
 function applyOperatorState(record){
   const data=record.payload;
   if(!data||!Array.isArray(data.projects)||!Array.isArray(data.applications)||!Array.isArray(data.tickets)||!Array.isArray(data.records))throw new Error('서버 운영 정보의 형식이 올바르지 않습니다.');
+  if(Array.isArray(data.employees)&&data.employees.length)EMPLOYEES=structuredClone(data.employees);
+  sheetSync=data.sheetSync&&typeof data.sheetSync==='object'?structuredClone(data.sheetSync):null;
   PROJECTS=structuredClone(data.projects);applications=structuredClone(data.applications);
   applicationEvents=structuredClone(data.applicationEvents||[]);records=structuredClone(data.records);
   TICKETS=structuredClone(data.tickets);completed=structuredClone(data.completed||{});
@@ -242,7 +255,7 @@ async function hydrateOperatorState(){
 function prepareOperatorCache(){
   let saved;try{saved=JSON.parse(localStorage.getItem(STORAGE_KEY));}catch{}
   if(saved?.operatorOwnerId&&saved.operatorOwnerId!==cloudUser?.id){
-    PROJECTS=structuredClone(INITIAL_PROJECTS);applications=structuredClone(INITIAL_APPLICATIONS);
+    EMPLOYEES=structuredClone(INITIAL_EMPLOYEES);sheetSync=null;PROJECTS=structuredClone(INITIAL_PROJECTS);applications=structuredClone(INITIAL_APPLICATIONS);
     applicationEvents=[];records=structuredClone(INITIAL_RECORDS);TICKETS=structuredClone(INITIAL_TICKETS);completed={};drafts={};
     operatorVersion=0;operatorOwnerId=null;operatorDirty=false;operatorConflict=null;operatorSaveStatus='local';
     localStorage.removeItem(STORAGE_KEY);
@@ -299,6 +312,52 @@ async function cloudRequest(path,{method='GET',body,headers={}}={}) {
   const result=await response.json().catch(()=>({error:'서버 응답을 읽지 못했습니다.'}));
   if(!response.ok)throw Object.assign(new Error(result.error||'서버 요청에 실패했습니다.'),{status:response.status,current:result.current});
   return result;
+}
+async function initializeSheetSource(){
+  try{sheetSourceStatus=await cloudRequest('/api/sheets/status');}
+  catch{sheetSourceStatus={configured:false,spreadsheetId:null};}
+  if(route().view==='home')render();
+}
+function sheetSourcePanel(){
+  const link=sheetSourceStatus.spreadsheetId?`<a href="https://docs.google.com/spreadsheets/d/${encodeURIComponent(sheetSourceStatus.spreadsheetId)}/edit" target="_blank" rel="noopener noreferrer">예시 스프레드시트 열기 ${icon('external')}</a>`:'';
+  const last=sheetSync?.lastSuccessAt?new Date(sheetSync.lastSuccessAt).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}):null;
+  return `<section class="panel sheet-source-panel"><div><h2>Google 스프레드시트 원본</h2><p class="caption muted">직원명부·프로젝트·대상·신청이력 네 탭을 읽어 현재 신청 현황을 갱신합니다.</p><p class="caption">${sheetSyncError?escapeHtml(sheetSyncError):last?`마지막 가져오기: ${escapeHtml(last)} · 직원 ${sheetSync.employeeCount}명 · 이력 ${sheetSync.eventCount}건`:sheetSourceStatus.configured?'아직 가져오지 않았어요.':'웹앱의 Google Sheets 읽기 권한 설정이 필요합니다.'}</p>${link}</div><button class="button" data-action="sync-sheet" ${sheetSyncBusy||!sheetSourceStatus.configured||!cloudUser?'disabled':''}>${sheetSyncBusy?'가져오는 중…':'시트에서 가져오기'}</button></section>`;
+}
+async function syncSheetSource(){
+  if(!requireOperator()||sheetSyncBusy)return;
+  sheetSyncBusy=true;sheetSyncError='';render();
+  try{
+    const source=await cloudRequest('/api/sheets/sync',{method:'POST'});
+    if(source?.sync?.status!=='success'||!Array.isArray(source.employees)||!Array.isArray(source.sourceProjects)||!Array.isArray(source.projectTargets)||!Array.isArray(source.events)||!Array.isArray(source.applications))throw new Error('시트의 데이터 형식을 확인해주세요.');
+    const teamByName=new Map(TEAMS.map(team=>[team.name,team.id]));
+    const importedEmployees=source.employees.map(row=>{
+      const team=teamByName.get(row.teamName);
+      if(!team)throw new Error(`${row.teamName}은 현재 웹앱에 등록되지 않은 팀입니다.`);
+      return {...row,team};
+    });
+    const projectIds=new Set(source.sourceProjects.map(row=>row.id));
+    if(source.sourceProjects.some(row=>!getProject(row.id)))throw new Error('시트에 웹앱에 없는 프로젝트 ID가 있습니다. 프로젝트를 먼저 등록해주세요.');
+    const targetByProject=new Map(source.projectTargets.map(row=>[row.projectId,row]));
+    const kstTime=value=>new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}).format(new Date(value)).replace(' ','T');
+    EMPLOYEES=importedEmployees;
+    PROJECTS=PROJECTS.map(project=>projectIds.has(project.id)?{
+      ...project,targetIds:targetByProject.get(project.id)?.targetIds||[],requiredIds:targetByProject.get(project.id)?.requiredIds||[],
+      dataKind:'sheet',lastCheckedAt:kstTime(source.sync.lastSuccessAt),
+    }:project);
+    applications=[...applications.filter(row=>!projectIds.has(row.projectId)),...source.applications];
+    const prior=new Map();
+    const importedEvents=source.events.map(event=>{
+      const key=`${event.projectId}:${event.employeeId}`,fromStatus=prior.get(key)||'none';
+      prior.set(key,event.status);
+      return {id:`sheet:${event.sourceEventId}`,projectId:event.projectId,employeeId:event.employeeId,
+        fromStatus,toStatus:event.status,reason:event.reason||'',actor:'Google Sheets',at:kstTime(event.occurredAt)};
+    });
+    applicationEvents=[...applicationEvents.filter(event=>!projectIds.has(event.projectId)),...importedEvents];
+    TICKETS.forEach(ticket=>{if(projectIds.has(ticket.project)&&!ticket.key&&['pending','scheduled'].includes(ticket.state)){ticket.state='retired';ticket.lifecycleReason='Google Sheets 원본으로 현황 갱신';}});
+    sheetSync={spreadsheetId:source.spreadsheetId,lastSuccessAt:source.sync.lastSuccessAt,employeeCount:importedEmployees.length,eventCount:source.events.length};
+    persist();render();void refreshOfficialCalendarAndTickets();toast('Google Sheets의 직원명부와 신청 이력을 가져왔어요.');
+  }catch(error){sheetSyncError=error.message||'시트를 읽지 못했습니다.';render();}
+  finally{sheetSyncBusy=false;if(route().view==='home')render();}
 }
 const cloudPayload = d => ({body:d.body,purpose:d.purpose,tone:d.tone,mode:d.mode,scope:d.scope,teams:d.teams,dmSelection:d.dmSelection,selectedIds:d.selectedIds,channels:d.channels,resources:d.resources||[],brief:d.brief,briefStale:d.briefStale===true,generatedAt:d.generatedAt||null,generatedModel:d.generatedModel||null});
 function cloudLabel(t) {
@@ -492,7 +551,7 @@ function recentRows(list) {
 }
 function home() {
   const list=pendingProjects();
-  return `${heading('오늘 확인할 일','동료들의 신청과 안내, 오늘 필요한 일부터 챙겨요.','<a class="button" href="#projects">프로젝트 둘러보기 '+icon('arrow')+'</a>',new Date().toLocaleDateString('ko-KR',{timeZone:'Asia/Seoul',month:'long',day:'numeric',weekday:'long'}))}${summary()}
+  return `${heading('오늘 확인할 일','동료들의 신청과 안내, 오늘 필요한 일부터 챙겨요.','<a class="button" href="#projects">프로젝트 둘러보기 '+icon('arrow')+'</a>',new Date().toLocaleDateString('ko-KR',{timeZone:'Asia/Seoul',month:'long',day:'numeric',weekday:'long'}))}${sheetSourcePanel()}${summary()}
     <div class="home-top"><section class="panel" aria-labelledby="today-title"><div class="panel-heading"><div><h2 id="today-title">함께 챙길 프로젝트 <span class="count">${list.length}</span></h2><p class="caption muted">프로젝트를 열면 전체 티켓을 확인할 수 있어요.</p></div>${tag('확인 기다림','orange')}</div>${list.length?projectRows(list):'<p class="empty">오늘 확인할 일을 모두 챙겼어요.<br>프로젝트에서 다음 일정을 확인할 수 있어요.</p>'}</section>
     <section class="panel home-recent" aria-labelledby="recent-title"><div class="panel-heading"><h2 id="recent-title">최근 보낸 안내</h2><a href="#history" class="caption muted">전체 보기 ${icon('arrow')}</a></div>${recentRows([...records].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,3))}<div class="panel-bottom">안내를 누르면 원문과 Slack 링크를 확인해요.</div></section></div>
     <section class="panel" aria-labelledby="calendar-title"><div class="panel-heading"><div><h2 id="calendar-title">팀 행사와 복지 일정</h2><p class="caption muted">신청 마감부터 동료들과 함께할 날까지</p></div><div class="segmented" aria-label="일정 보기 방식"><button data-calendar-view="calendar" aria-pressed="${calendar.view==='calendar'}">캘린더</button><button data-calendar-view="list" aria-pressed="${calendar.view==='list'}">목록</button></div></div><div id="calendar-content">${calendar.view==='calendar'?calendarMarkup():projectTable()}</div></section>`;
@@ -631,7 +690,7 @@ function makeNoticeBrief(p){
   }));
 }
 function noticeCardMarkup(d){
-  return `<section class="notice-card panel" aria-labelledby="notice-card-title"><div class="notice-card-heading"><div><p class="eyebrow">공지용 정보 카드</p><h2 id="notice-card-title">구성원이 행동할 정보</h2><p class="help">필요한 내용을 바로 고치고, 공지에서 뺄 항목은 체크를 해제하세요.</p>${d.briefStale?'<p class="error-message">프로젝트 정보가 바뀌었습니다. 카드를 확인하고 초안을 다시 생성해주세요.</p>':''}</div><button class="button primary" data-action="generate-notice" ${cloudUser?'':'disabled'}>Gemma로 초안 생성</button></div><div class="notice-card-grid">${Object.entries(BRIEF_LABELS).map(([key,label])=>{const item=d.brief[key];return `<div class="notice-card-field ${['action','deadline'].includes(key)?'essential':''}"><div class="notice-card-field-head"><label for="brief-${key}">${label}</label><label class="brief-include"><input type="checkbox" data-brief-include="${key}" ${item.included?'checked':''}>공지에 포함</label></div><textarea id="brief-${key}" data-brief-field="${key}" rows="${['action','method','exception'].includes(key)?3:2}" maxlength="2000" placeholder="${['cost','exception'].includes(key)?'자료에 없으면 비워두세요':'내용을 입력하세요'}">${escapeHtml(item.value)}</textarea><small>${escapeHtml(item.source)}</small></div>`;}).join('')}</div><p class="help">무엇을·해야 할 일·마감은 초안 생성 전에 확인해주세요. AI가 만든 본문도 보내기 전에 검토해야 합니다.</p></section>`;
+  return `<section class="notice-card panel" aria-labelledby="notice-card-title"><div class="notice-card-heading"><div><p class="eyebrow">공지용 정보 카드</p><h2 id="notice-card-title">구성원이 행동할 정보</h2><p class="help">필요한 내용을 바로 고치고, 공지에서 뺄 항목은 체크를 해제하세요.</p>${d.briefStale?'<p class="error-message">프로젝트 정보가 바뀌었습니다. 카드를 확인하고 초안을 다시 생성해주세요.</p>':''}</div><button class="button primary" data-action="generate-notice" ${cloudUser?'':'disabled'}>Gemini로 초안 생성</button></div><div class="notice-card-grid">${Object.entries(BRIEF_LABELS).map(([key,label])=>{const item=d.brief[key];return `<div class="notice-card-field ${['action','deadline'].includes(key)?'essential':''}"><div class="notice-card-field-head"><label for="brief-${key}">${label}</label><label class="brief-include"><input type="checkbox" data-brief-include="${key}" ${item.included?'checked':''}>공지에 포함</label></div><textarea id="brief-${key}" data-brief-field="${key}" rows="${['action','method','exception'].includes(key)?3:2}" maxlength="2000" placeholder="${['cost','exception'].includes(key)?'자료에 없으면 비워두세요':'내용을 입력하세요'}">${escapeHtml(item.value)}</textarea><small>${escapeHtml(item.source)}</small></div>`;}).join('')}</div><p class="help">무엇을·해야 할 일·마감은 초안 생성 전에 확인해주세요. AI가 만든 본문도 보내기 전에 검토해야 합니다.</p></section>`;
 }
 const noticeKind = t => t.purpose==='첫 안내'?'initial':/D-\d|마감|마지막/.test(t.title)?'deadline':/리마인드|다시|추가|한 번 더/.test(t.title)?'reminder':'initial';
 function getDraft(t) {
@@ -657,11 +716,11 @@ function refreshNoticeCandidate(t){
   if(target)target.outerHTML=noticeCandidateMarkup(t);
 }
 async function generateNoticeDraft(t){
-  if(!cloudUser){toast('Gemma 초안을 만들려면 Supabase에 로그인해주세요.');return;}
+  if(!cloudUser){toast('Gemini 초안을 만들려면 Supabase에 로그인해주세요.');return;}
   const d=getDraft(t);
   if(['what','action','deadline'].some(key=>!d.brief[key]?.included||!d.brief[key]?.value.trim())){toast('무엇을, 해야 할 일, 마감을 카드에서 확인해주세요.');return;}
   const {input,signature}=noticeContext(t),button=$('[data-action="generate-notice"]');
-  if(button){button.disabled=true;button.textContent='Gemma가 작성 중…';}
+  if(button){button.disabled=true;button.textContent='Gemini가 작성 중…';}
   try{
     const result=await cloudRequest('/api/notices/generate',{method:'POST',body:input});
     if(signature!==noticeContext(t).signature){toast('정보 카드나 대상이 바뀌어 이전 생성 결과를 적용하지 않았어요.');return;}
@@ -669,7 +728,7 @@ async function generateNoticeDraft(t){
     if(route().view==='review'&&route().id===t.id)refreshNoticeCandidate(t);
     toast('새 초안을 만들었어요. 현재 본문과 비교한 뒤 선택해주세요.');
   }catch(error){toast(error.message);}
-  finally{if(button?.isConnected){button.disabled=false;button.textContent='Gemma로 초안 다시 생성';}}
+  finally{if(button?.isConnected){button.disabled=false;button.textContent='Gemini로 초안 다시 생성';}}
 }
 function audience(p,d) {
   const s=status(p),target=new Set(s.targetIds),pending=new Set(s.pendingIds);
@@ -696,7 +755,7 @@ function recipientTable(list,p) {
 function reviewPage(id) {
   const t=getTicket(id),p=getProject(t.project),d=getDraft(t);
   const resources=(d.resources||[]).map((item,index)=>`<div class="draft-resource"><span>${item.kind==='file'?'📎':'🔗'} ${escapeHtml(item.label)}${item.kind==='file'?` · ${Math.ceil((item.byte_size||0)/1024)} KB`:''}</span>${item.kind==='file'&&cloudUser?`<a class="button compact" href="/api/files/${encodeURIComponent(item.id)}" target="_blank" rel="noopener noreferrer">열기</a>`:''}<button class="button compact" data-remove-resource="${index}">제거</button></div>`).join('')||'<p class="help">이번 안내에 추가한 자료가 없어요.</p>';
-  return `<a href="#project/${p.id}" class="back-link">${icon('back')} ${p.name} 전체 티켓</a>${heading('보낼 내용 확인',`${p.name} · ${t.title}`)}${noticeCardMarkup(d)}<div class="review-grid"><section class="panel form-panel"><h2>동료에게 보낼 메시지</h2><p class="caption muted" style="margin:7px 0 22px">정보 카드로 생성한 초안을 확인하고 다듬어주세요.</p><div class="draft-save-box" role="status" aria-live="polite"><span id="draft-save-state">${escapeHtml(cloudLabel(t))}</span><button class="button compact" id="draft-retry" data-action="retry-draft-save" ${cloudState[t.id]?.status==='error'?'':'hidden'}>다시 시도</button><span id="draft-conflict-actions" class="actions" ${cloudState[t.id]?.status==='conflict'?'':'hidden'}><button class="button compact" data-action="load-cloud-draft">서버 내용 불러오기</button><button class="button compact" data-action="overwrite-cloud-draft">내 변경 저장</button></span></div><div class="field"><label for="draft-tone">말투</label><select id="draft-tone"><option value="friendly" ${d.tone==='friendly'?'selected':''}>친근하고 밝게</option><option value="concise" ${d.tone==='concise'?'selected':''}>친근하고 간결하게</option><option value="action" ${d.tone==='action'?'selected':''}>신청 요청을 명확하게</option></select><p class="help">말투를 바꾸면 확인된 정보 카드로 Gemma가 본문을 다시 작성합니다. 직접 수정한 내용은 교체돼요.</p></div><div class="draft-area"><label class="preview-label" for="draft-body"><span>메시지 본문</span>${tag(d.generatedModel?'Gemma 초안':'직접 작성')}</label><textarea id="draft-body" maxlength="20000">${escapeHtml(d.body)}</textarea><p class="help">신청 링크와 날짜가 맞는지 보내기 전에 확인해주세요.</p></div><div class="draft-attachments"><h3>이번 안내에 포함할 자료</h3><p class="help">링크는 본문에 넣고, 파일은 로그인한 계정의 비공개 저장소에 저장해요. 실제 Slack 전송은 아직 연결되지 않았어요.</p><div id="draft-resources">${resources}</div><div class="resource-add"><input id="resource-label" type="text" maxlength="160" aria-label="링크 이름" placeholder="링크 이름"><input id="resource-url" type="url" maxlength="2000" aria-label="링크 주소" placeholder="https://…"><button class="button" data-action="add-resource-link">링크 추가</button></div><div class="field"><label for="resource-file">파일 첨부 (PDF·DOCX·TXT·MD·이미지, 4MB 이하)</label><input id="resource-file" type="file" accept=".pdf,.docx,.txt,.md,.png,.jpg,.jpeg" ${cloudUser?'':'disabled'}></div>${cloudUser?'':'<p class="help">파일을 저장하려면 상단의 Supabase 로그인을 완료해주세요.</p>'}</div></section><section class="panel form-panel"><h2 style="margin-bottom:22px">보내는 방법과 대상</h2><div id="recipient-settings">${recipientSettings(t)}</div></section></div><div class="approval-bar"><div><label class="confirm-row"><input type="checkbox" id="send-confirm" ${d.confirmed?'checked':''}><span id="confirmation-label">${confirmationLabel(d)}</span></label><p>체크하면 최종 본문과 대상을 확인하는 창이 열립니다.</p></div><button class="button primary" id="send-button" data-action="simulate-send" ${canSend(t)?'':'disabled'}>${sendLabel(t)} ${icon('arrow')}</button></div>`;
+  return `<a href="#project/${p.id}" class="back-link">${icon('back')} ${p.name} 전체 티켓</a>${heading('보낼 내용 확인',`${p.name} · ${t.title}`)}${noticeCardMarkup(d)}<div class="review-grid"><section class="panel form-panel"><h2>동료에게 보낼 메시지</h2><p class="caption muted" style="margin:7px 0 22px">정보 카드로 생성한 초안을 확인하고 다듬어주세요.</p><div class="draft-save-box" role="status" aria-live="polite"><span id="draft-save-state">${escapeHtml(cloudLabel(t))}</span><button class="button compact" id="draft-retry" data-action="retry-draft-save" ${cloudState[t.id]?.status==='error'?'':'hidden'}>다시 시도</button><span id="draft-conflict-actions" class="actions" ${cloudState[t.id]?.status==='conflict'?'':'hidden'}><button class="button compact" data-action="load-cloud-draft">서버 내용 불러오기</button><button class="button compact" data-action="overwrite-cloud-draft">내 변경 저장</button></span></div><div class="field"><label for="draft-tone">말투</label><select id="draft-tone"><option value="friendly" ${d.tone==='friendly'?'selected':''}>친근하고 밝게</option><option value="concise" ${d.tone==='concise'?'selected':''}>친근하고 간결하게</option><option value="action" ${d.tone==='action'?'selected':''}>신청 요청을 명확하게</option></select><p class="help">말투를 바꾸면 확인된 정보 카드로 Gemini가 본문을 다시 작성합니다. 직접 수정한 내용은 교체돼요.</p></div><div class="draft-area"><label class="preview-label" for="draft-body"><span>메시지 본문</span>${tag(d.generatedModel?'Gemini 초안':'직접 작성')}</label><textarea id="draft-body" maxlength="20000">${escapeHtml(d.body)}</textarea><p class="help">신청 링크와 날짜가 맞는지 보내기 전에 확인해주세요.</p></div><div class="draft-attachments"><h3>이번 안내에 포함할 자료</h3><p class="help">링크는 본문에 넣고, 파일은 로그인한 계정의 비공개 저장소에 저장해요. 실제 Slack 전송은 아직 연결되지 않았어요.</p><div id="draft-resources">${resources}</div><div class="resource-add"><input id="resource-label" type="text" maxlength="160" aria-label="링크 이름" placeholder="링크 이름"><input id="resource-url" type="url" maxlength="2000" aria-label="링크 주소" placeholder="https://…"><button class="button" data-action="add-resource-link">링크 추가</button></div><div class="field"><label for="resource-file">파일 첨부 (PDF·DOCX·TXT·MD·이미지, 4MB 이하)</label><input id="resource-file" type="file" accept=".pdf,.docx,.txt,.md,.png,.jpg,.jpeg" ${cloudUser?'':'disabled'}></div>${cloudUser?'':'<p class="help">파일을 저장하려면 상단의 Supabase 로그인을 완료해주세요.</p>'}</div></section><section class="panel form-panel"><h2 style="margin-bottom:22px">보내는 방법과 대상</h2><div id="recipient-settings">${recipientSettings(t)}</div></section></div><div class="approval-bar"><div><label class="confirm-row"><input type="checkbox" id="send-confirm" ${d.confirmed?'checked':''}><span id="confirmation-label">${confirmationLabel(d)}</span></label><p>체크하면 최종 본문과 대상을 확인하는 창이 열립니다.</p></div><button class="button primary" id="send-button" data-action="simulate-send" ${canSend(t)?'':'disabled'}>${sendLabel(t)} ${icon('arrow')}</button></div>`;
 }
 const confirmationLabel = d => d.mode==='dm'?'보낼 내용과 DM을 받을 동료를 확인했어요.':'보낼 내용과 게시할 채널·공개 범위를 확인했어요.';
 const approvalSignature = t => {const d=getDraft(t),a=audience(getProject(t.project),d);return JSON.stringify({body:d.body,mode:d.mode,recipientIds:a.list.map(e=>e.id),channelIds:a.channels.map(c=>c.id),resources:d.resources||[]});};
@@ -729,7 +788,7 @@ function render() {
     const t=getTicket(r.id),d=getDraft(t),all=$('#all-teams');
     if(all)all.indeterminate=d.teams.length>0&&d.teams.length<TEAMS.length;
     const toneField=$('#draft-tone')?.closest('.field');
-    if(toneField){toneField.querySelector('.help').textContent='말투를 바꾸면 Gemma가 새 초안을 자동 생성합니다. 직접 고친 본문은 새 초안을 선택하기 전까지 유지돼요.';toneField.insertAdjacentHTML('afterend',`<div class="field"><label for="notice-purpose">공지 목적</label><select id="notice-purpose">${Object.entries(NOTICE_PURPOSES).map(([key,label])=>`<option value="${key}" ${d.purpose===key?'selected':''}>${label}</option>`).join('')}</select></div>`);}
+    if(toneField){toneField.querySelector('.help').textContent='말투를 바꾸면 Gemini가 새 초안을 자동 생성합니다. 직접 고친 본문은 새 초안을 선택하기 전까지 유지돼요.';toneField.insertAdjacentHTML('afterend',`<div class="field"><label for="notice-purpose">공지 목적</label><select id="notice-purpose">${Object.entries(NOTICE_PURPOSES).map(([key,label])=>`<option value="${key}" ${d.purpose===key?'selected':''}>${label}</option>`).join('')}</select></div>`);}
     $('#draft-body')?.closest('.draft-area')?.insertAdjacentHTML('afterend',noticeCandidateMarkup(t));
     filterRecipientRows();
   }
@@ -932,7 +991,8 @@ document.addEventListener('click',event=>{
     }break;
     case 'select-visible-members':document.querySelectorAll('[data-member-row]:not([hidden]) [data-target-member]').forEach(input=>input.checked=true);refreshMemberPicker();break;
     case 'clear-visible-members':document.querySelectorAll('[data-member-row]:not([hidden]) [data-target-member]').forEach(input=>input.checked=false);refreshMemberPicker();break;
-    case 'reset-sample':if(!requireOperator())break;if(!resetArmed){resetArmed=true;render();break;}resetArmed=false;PROJECTS=structuredClone(INITIAL_PROJECTS);applications=structuredClone(INITIAL_APPLICATIONS);applicationEvents=[];records=structuredClone(INITIAL_RECORDS);TICKETS=structuredClone(INITIAL_TICKETS);completed={};drafts={};calendar={year:Number(TODAY_KST.slice(0,4)),month:Number(TODAY_KST.slice(5,7))-1,selected:TODAY_KST,view:'calendar'};persist();render();toast('예시 데이터로 초기화했어요.');break;
+    case 'sync-sheet':void syncSheetSource();break;
+    case 'reset-sample':if(!requireOperator())break;if(!resetArmed){resetArmed=true;render();break;}resetArmed=false;EMPLOYEES=structuredClone(INITIAL_EMPLOYEES);sheetSync=null;sheetSyncError='';PROJECTS=structuredClone(INITIAL_PROJECTS);applications=structuredClone(INITIAL_APPLICATIONS);applicationEvents=[];records=structuredClone(INITIAL_RECORDS);TICKETS=structuredClone(INITIAL_TICKETS);completed={};drafts={};calendar={year:Number(TODAY_KST.slice(0,4)),month:Number(TODAY_KST.slice(5,7))-1,selected:TODAY_KST,view:'calendar'};persist();render();toast('예시 데이터로 초기화했어요.');break;
     case 'calendar-today':calendar={year:Number(TODAY_KST.slice(0,4)),month:Number(TODAY_KST.slice(5,7))-1,selected:TODAY_KST,view:'calendar'};refreshCalendar();break;
     case 'new-record':newHistory(button.dataset.project);break;
     case 'close-dialog':closeHistory();break;
@@ -1003,4 +1063,4 @@ window.addEventListener('hashchange',()=>{
   render();window.scrollTo({top:0,behavior:'instant'});$('#content').focus({preventScroll:true});
 });
 window.addEventListener('focus',()=>{void refreshOperatorState();const r=route();if(r.view==='review')refreshCloudDraft(getTicket(r.id));});
-restore();render();initializeCloud();
+restore();render();initializeCloud();void initializeSheetSource();

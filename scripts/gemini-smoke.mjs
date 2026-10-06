@@ -2,13 +2,13 @@ import { GoogleGenAI } from '@google/genai';
 
 // Explicit live smoke test. Only synthetic documents are sent to Google.
 const apiKey = process.env.GEMINI_API_KEY?.trim();
-const model = process.env.GEMMA_MODEL?.trim();
+const model = process.env.GEMINI_MODEL?.trim();
 
 if (!apiKey || !model) {
-  console.error('GEMINI_API_KEY와 GEMMA_MODEL을 .env에 설정하세요.');
+  console.error('GEMINI_API_KEY와 GEMINI_MODEL을 .env에 설정하세요.');
   process.exitCode = 1;
-} else if (!/^gemma-[a-z0-9-]+$/.test(model)) {
-  console.error('GEMMA_MODEL에는 Gemma 모델 ID를 입력하세요.');
+} else if (!/^gemini-[a-z0-9.-]+$/.test(model)) {
+  console.error('GEMINI_MODEL에는 Gemini 모델 ID를 입력하세요.');
   process.exitCode = 1;
 } else {
   try {
@@ -38,13 +38,13 @@ if (!apiKey || !model) {
       console.error('호출은 완료됐지만 텍스트 결과가 없습니다.');
       process.exitCode = 1;
     } else {
-      console.log('Gemma 연결 성공: 가상 자료 분석 결과');
+      console.log('Gemini 연결 성공: 가상 자료 분석 결과');
       console.log(result.split(apiKey).join('[REDACTED]'));
     }
   } catch (error) {
     // Do not print SDK errors, request headers, or credentials.
     const status = Number.isInteger(error?.status) ? error.status : null;
-    console.error(`Gemma 호출 실패${status ? ` (HTTP ${status})` : ''}.`);
+    console.error(`Gemini 호출 실패${status ? ` (HTTP ${status})` : ''}.`);
     const guidance = {
       400: '요청 형식과 API 키의 유효성을 확인하세요.',
       401: 'API 키 인증을 확인하세요.',

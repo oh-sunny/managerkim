@@ -10,13 +10,13 @@ HTML·CSS·JavaScript와 Node.js 정적 서버로 실행합니다. 현재 가능
 - 신청·취소·확정 상태 변경과 현황·DM 대상 재계산
 - 프로젝트·신청 이력·티켓·보낸 안내의 Supabase 저장과 변경 버전 기록
 - 공식 공휴일을 반영한 규칙 티켓 생성·갱신, 보류·안내하지 않기와 사유 기록
-- 수정 가능한 공지 정보 카드, 카드 기반 Gemma 초안 생성·사실 검증, 현재 본문과 새 초안 비교, 팀별 DM 대상 또는 채널 선택, 모의 발송
+- 수정 가능한 공지 정보 카드, 카드 기반 Gemini 초안 생성·사실 검증, 현재 본문과 새 초안 비교, 팀별 DM 대상 또는 채널 선택, 모의 발송
 - 안내 초안·대상 선택의 Supabase 저장·복원. 발송 확인 체크는 복원하지 않음
-- 여러 PDF·DOCX·TXT·MD와 붙여넣은 내용을 Gemma로 함께 분석하고 핵심 정보·출처·누락·충돌을 검토 후 적용
+- 여러 PDF·DOCX·TXT·MD와 붙여넣은 내용을 Gemini로 함께 분석하고 핵심 정보·출처·누락·충돌을 검토 후 적용
 - 원문을 길게 복사하는 대신 공지 목적·대상·신청 절차를 짧게 편집하고, 근거와 수정 입력은 필요할 때 펼쳐 확인
 - 스캔 PDF 자동 OCR과 PDF 전체 이미지 읽기, 적용한 정보의 근거·시각을 프로젝트와 함께 로컬 저장
 
-동료 명단과 기존 티켓 일부는 예시 데이터입니다. 새 프로젝트는 공개 공휴일 달력을 조회한 뒤 규칙으로 티켓을 만듭니다. Google Sheets 이력 조회·정규화 모듈은 있지만 실제 시트 인증과 화면 동기화는 아직 연결되지 않았습니다. Slack 전송과 서버의 주기 실행도 아직 연결되지 않았습니다. 메시지는 실제로 보내지 않습니다.
+동료 명단과 기존 티켓 일부는 예시 데이터입니다. 새 프로젝트는 공개 공휴일 달력을 조회한 뒤 규칙으로 티켓을 만듭니다. Google Sheets 예시 파일과 화면의 수동 동기화 경로를 준비했으며 서버용 서비스 계정 자격 증명 설정이 남았습니다. Slack 전송과 서버의 주기 실행도 아직 연결되지 않았습니다. 메시지는 실제로 보내지 않습니다.
 
 ## 로컬 실행
 
@@ -35,6 +35,21 @@ npm run dev
 
 계산과 텍스트 추출의 자동 검증은 `npm test`로 실행합니다.
 
+## 예시 Google 스프레드시트
+
+[총무 에이전트 예시 데이터](https://docs.google.com/spreadsheets/d/1LDTpYr0k_oikTQT4H-CHhlrIVlz1Cv97BqQ4wdeeoqQ/edit)는 모두 가상 정보이며 네 탭으로 나뉩니다.
+
+| 탭 | 내용 | 웹앱에서 사용하는 열 |
+| --- | --- | --- |
+| 직원명부 | 직원 160명의 사번·이름·회사 이메일·본부·팀·직급·직책·고용 형태·재직 상태·입사일·근무지·관리자 사번 | `employeeId`와 직원 정보 |
+| 프로젝트 | 예시 프로젝트 3개의 ID와 운영 정보 | `projectId`, `프로젝트명` |
+| 대상 | 프로젝트별 참여 대상 26행과 필수 여부 | `projectId`, `employeeId`, `required` |
+| 신청이력 | 신청·확정·취소·재신청 17건 | `sourceEventId`, `projectId`, `employeeId`, `status`, `occurredAt` |
+
+직원명부는 회사의 전체 사원 명부이며 `대상` 탭은 프로젝트마다 그중 누구를 신청 대상으로 삼는지 나타냅니다. `employeeId`는 네 탭을 잇는 고정 ID이고 `사번`은 사람이 확인하기 쉬운 값입니다. 이력의 `occurredAt`은 `2026-10-03 16:00:00 KST` 형식을 사용합니다. 이전 사건 행을 수정·삭제하지 않고 새 사건을 마지막 행에 추가해야 재신청 순서까지 보존됩니다.
+
+웹앱 서버가 비공개 시트를 읽으려면 Google Cloud에서 **Sheets API를 활성화하고 서비스 계정을 만든 뒤**, 시트를 그 서비스 계정 이메일에 **뷰어**로 공유합니다. [Google 서비스 계정 안내](https://developers.google.com/identity/protocols/oauth2/service-account)처럼 서버가 읽기 전용 접근 토큰을 발급받습니다. `.env` 또는 Vercel 환경 변수에 `GOOGLE_SHEETS_SPREADSHEET_ID`, `GOOGLE_SHEETS_CLIENT_EMAIL`, `GOOGLE_SHEETS_PRIVATE_KEY`를 설정합니다. 개인 키의 줄바꿈은 한 줄의 `\n`으로 입력하고 키 파일은 Git에 넣지 않습니다. 홈 화면의 **시트에서 가져오기**는 로그인한 운영자가 누를 때 네 탭을 함께 읽고 직원명부·대상·신청 이력을 갱신합니다. 실패하면 기존 현황을 유지하고 오류를 표시합니다. 서비스 계정 설정 전에는 시트와 화면의 자동 연결이 시작되지 않습니다.
+
 운영 정보를 바꾸려면 Supabase 운영자 로그인이 필요합니다. 프로젝트·대상 명단·신청/취소 사유·티켓·안내 기록은 계정별 `operator_states`에 저장하고 각 버전을 `operator_state_revisions`에 남깁니다. 브라우저에는 복원용 캐시가 남습니다. 여러 탭의 버전이 다르면 덮어쓰기 전에 충돌을 표시합니다. 발송 확인 체크는 저장하지 않으며, 새로고침 뒤 최종 확인을 다시 해야 합니다.
 
 ## Supabase 운영 정보·초안·파일 저장 설정
@@ -45,13 +60,13 @@ npm run dev
 
 로그인 후 운영 정보와 안내 초안은 각각 `operator_states`, `notice_drafts`에 자동 저장되며 저장 상태와 버전 충돌을 화면에 표시합니다. 첨부 파일은 비공개 `notice-files` 버킷과 `notice_resources`에 저장됩니다. 모의 발송의 본문·대상·자료 목록도 운영 기록에 저장합니다. 계정별 저장 구조이므로 조직의 여러 운영자 계정 사이에 데이터를 공유하는 권한 모델은 아직 없습니다.
 
-## Gemma 연결 확인
+## Gemini 연결 확인
 
-`npm install` 후 `.env`에 `GEMINI_API_KEY`와 `GEMMA_MODEL`을 설정하고 `npm run test:gemma`를 실행합니다. 이 명령은 가상 자료로 연결만 점검하며, 가상 문서 두 개만 Google API에 전달합니다. 기존 `npm test`에는 외부 API 호출이 포함되지 않습니다. 키는 출력하지 않습니다.
+`npm install` 후 `.env`에 `GEMINI_API_KEY`와 `GEMINI_MODEL=gemini-3.8-flash`를 설정하고 `npm run test:gemini`를 실행합니다. 모델 변수를 생략하면 `gemini-3.8-flash`를 사용합니다. 이 명령은 가상 자료로 연결만 점검하며, 가상 문서 두 개만 Google API에 전달합니다. 기존 `npm test`에는 외부 API 호출이 포함되지 않습니다. 키는 출력하지 않습니다. HTTP 402가 나오면 Google AI Studio에서 해당 프로젝트의 결제·선불 크레딧을 확인합니다.
 
-웹사이트에서는 **프로젝트 등록·수정 → 자료 분석 → 후보 카드에서 수정·반영 → 프로젝트 저장 → 공지 정보 카드 확인 → Gemma 초안 생성 → 현재 본문과 비교 후 선택** 순서로 사용합니다. 기존 값과 다른 정보나 충돌은 직접 선택해야 합니다. 공지 목적·말투·정보 카드·대상을 바꾸면 새 초안을 생성해 다시 비교합니다. 생성한 본문은 카드의 날짜·링크·수치와 대조하고 별도 Gemma 요청으로 근거 없는 주장도 검사합니다. Supabase 운영자 로그인이 필요하며 키는 서버에서만 사용합니다. 파일 6개, 개별 2MB·전체 2.8MB, PDF 파일당 30쪽, OCR 전체 8쪽, 추출 텍스트 8만 자까지 지원합니다. TXT·MD는 UTF-8입니다.
+웹사이트에서는 **프로젝트 등록·수정 → 자료 분석 → 후보 카드에서 수정·반영 → 프로젝트 저장 → 공지 정보 카드 확인 → Gemini 초안 생성 → 현재 본문과 비교 후 선택** 순서로 사용합니다. 기존 값과 다른 정보나 충돌은 직접 선택해야 합니다. 공지 목적·말투·정보 카드·대상을 바꾸면 새 초안을 생성해 다시 비교합니다. 생성한 본문은 카드의 날짜·링크·수치와 대조하고 별도 Gemini 요청으로 근거 없는 주장도 검사합니다. Supabase 운영자 로그인이 필요하며 키는 서버에서만 사용합니다. 파일 6개, 개별 2MB·전체 2.8MB, PDF 파일당 30쪽, OCR 전체 8쪽, 추출 텍스트 8만 자까지 지원합니다. TXT·MD는 UTF-8입니다.
 
-텍스트가 적거나 깨진 PDF 페이지는 Gemma 이미지 입력으로 자동 OCR합니다. 이미지 속 정보가 누락될 때는 ‘메모 추가 · 스캔 설정’에서 ‘모든 PDF 페이지를 이미지로 다시 읽기’를 켤 수 있으며, 추가 인식 시간이 걸립니다. OCR 페이지·판독 불가 항목은 원본과 대조해야 합니다. DOCX는 본문·표·머리말·꼬리말·주석이 아닌 각주/미주의 텍스트를 읽으며, 삽입 이미지는 OCR하지 않습니다.
+텍스트가 적거나 깨진 PDF 페이지는 Gemini 이미지 입력으로 자동 OCR합니다. 이미지 속 정보가 누락될 때는 ‘메모 추가 · 스캔 설정’에서 ‘모든 PDF 페이지를 이미지로 다시 읽기’를 켤 수 있으며, 추가 인식 시간이 걸립니다. OCR 페이지·판독 불가 항목은 원본과 대조해야 합니다. DOCX는 본문·표·머리말·꼬리말·주석이 아닌 각주/미주의 텍스트를 읽으며, 삽입 이미지는 OCR하지 않습니다.
 
 분석할 자료의 본문과 OCR 대상 이미지는 Google로 전송됩니다. 원본 파일과 전체 분석은 서버·DB에 저장하지 않습니다. 적용한 값과 근거·파일 해시·분석/적용 시각은 프로젝트와 함께 Supabase에 저장합니다. 선택한 원본 파일과 아직 적용하지 않은 분석 결과는 화면 이동·새로고침으로 사라집니다.
 
@@ -63,7 +78,7 @@ npm run dev
 
 1. 이 저장소의 배포할 변경을 Git에 커밋하고 GitHub `main`에 푸시합니다. 로컬 `.env`는 Git에 포함하지 않습니다.
 2. Vercel에서 **Add New → Project**로 GitHub 저장소를 가져옵니다. Root Directory는 저장소 루트로 둡니다. `vercel.json`의 **Framework Preset: Other**, **Output Directory: prototype** 설정을 사용하고 별도 Build Command는 지정하지 않습니다.
-3. Supabase를 사용할 경우 Vercel 프로젝트의 **Settings → Environment Variables**에 `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`를 Preview와 Production 환경용으로 입력합니다. 운영자 Auth 계정으로 로그인할 수 있어야 합니다. Gemma 분석·초안에는 `GEMINI_API_KEY`와 `GEMMA_MODEL`을 설정합니다. 공휴일 조회에는 별도 키가 필요하지 않습니다. Node.js는 22.13 이상(권장 24)으로 실행하며 환경 변수 변경 후 새 배포를 생성합니다.
+3. Supabase를 사용할 경우 Vercel 프로젝트의 **Settings → Environment Variables**에 `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`를 Preview와 Production 환경용으로 입력합니다. 운영자 Auth 계정으로 로그인할 수 있어야 합니다. Gemini 분석·초안에는 `GEMINI_API_KEY`와 `GEMINI_MODEL`을 설정합니다. 공휴일 조회에는 별도 키가 필요하지 않습니다. Node.js는 22.13 이상(권장 24)으로 실행하며 환경 변수 변경 후 새 배포를 생성합니다.
 4. Preview 배포에서 화면과 `/api/status`를 확인합니다. Supabase 설정을 했다면 `{ "configured": true }`가 나와야 합니다. 로그인, 초안 저장, 파일 업로드도 확인한 뒤 Production에 배포합니다.
 
 Vercel 함수의 요청·응답 크기 제한에 맞춰 첨부 파일은 4MB 이하입니다. 운영 정보 변경에는 로그인이 필요하지만 읽기 화면의 예시 데이터는 공개되어 있습니다. 실제 사내 자료를 넣기 전에 사이트 전체의 접근 제어를 설정해야 합니다.
@@ -113,8 +128,9 @@ Vercel 함수의 요청·응답 크기 제한에 맞춰 첨부 파일은 4MB 이
 │  ├─ document-reader.mjs           # PDF·DOCX·텍스트 자료 읽기
 │  ├─ document-analysis.mjs         # 자료 분석 요청과 AI 결과 처리
 │  ├─ application-source.mjs        # 대상 명단·신청 이력 정규화; 화면 미연결
-│  ├─ google-sheets-source.mjs      # Google Sheets 읽기 어댑터; 실제 인증·화면 미연결
-│  └─ gemma-smoke.mjs               # npm run test:gemma; 가상 자료로 외부 API 연결 확인
+│  ├─ google-sheets-source.mjs      # Google Sheets 네 탭 읽기·정규화
+│  ├─ google-sheets-service.mjs     # 서버용 읽기 전용 서비스 계정 인증
+│  └─ gemini-smoke.mjs               # npm run test:gemini; 가상 자료로 외부 API 연결 확인
 ├─ supabase/
 │  └─ migrations/                  # DB 테이블·접근 정책·저장소 변경 이력
 │     └─ 20261006015431_notice_drafts_and_resources.sql
@@ -165,7 +181,7 @@ Vercel 함수의 요청·응답 크기 제한에 맞춰 첨부 파일은 4MB 이
 
 ### 정리 후보
 
-`node_modules/`는 재생성 가능한 설치물입니다. 공간이 필요할 때 삭제 후 `npm ci`로 복원할 수 있지만, 앱·문서 처리·Gemma 연결 확인에 사용하는 패키지가 들어 있으므로 일반 작업 중에는 유지합니다. `package.json`과 `package-lock.json`도 함께 유지합니다.
+`node_modules/`는 재생성 가능한 설치물입니다. 공간이 필요할 때 삭제 후 `npm ci`로 복원할 수 있지만, 앱·문서 처리·Gemini 연결 확인에 사용하는 패키지가 들어 있으므로 일반 작업 중에는 유지합니다. `package.json`과 `package-lock.json`도 함께 유지합니다.
 
 `pdfjs-dist`와 `yauzl`은 현재 `scripts/document-reader.mjs`에서 사용하므로 미사용 패키지로 분류하지 않습니다. 의존성 정리는 현재 코드의 참조를 기준으로 판단합니다.
 

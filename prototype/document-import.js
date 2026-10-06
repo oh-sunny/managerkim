@@ -14,7 +14,7 @@ export function mountDocumentImport(root, { getValue, apply, loggedIn, login, sa
     <details class="document-extra"><summary>메모 추가 · 스캔 설정</summary><div class="field"><label for="document-text">함께 참고할 내용</label><textarea id="document-text" class="short-textarea" maxlength="80000" placeholder="메일이나 메모의 내용을 붙여넣으세요."></textarea></div>
     <label class="ocr-choice"><input id="document-ocr" type="checkbox"> 모든 PDF 페이지를 이미지로 다시 읽기</label>
     <p class="caption muted">스캔은 자동 인식합니다. 위 옵션은 이미지 속 정보가 누락될 때만 켜세요. OCR 단계가 추가되어 시간이 더 걸립니다. PDF당 30쪽 · OCR 전체 8쪽까지.</p></details>
-    <p class="document-disclosure">분석 시 텍스트·스캔 이미지가 Google Gemma로 전송됩니다. 원본은 서버에 보관하지 않고 공지에 자동 첨부하지 않습니다.</p></details>
+    <p class="document-disclosure">분석 시 텍스트·스캔 이미지가 Google Gemini로 전송됩니다. 원본은 서버에 보관하지 않고 공지에 자동 첨부하지 않습니다.</p></details>
     <div class="actions"><button type="button" class="button primary" data-doc="analyze">자료 분석하기</button><button type="button" class="button" data-doc="cancel" hidden>분석 취소</button></div>
     <p id="document-status" role="status" aria-live="polite"></p><p id="document-error" class="error-message" role="alert" hidden></p>
     <div id="document-results"></div>
