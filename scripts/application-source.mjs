@@ -132,6 +132,18 @@ export function failedApplicationSource(error, previous = null) {
 }
 
 export function tryNormalizeApplicationSource(input, previous = null) {
-  try { return normalizeApplicationSource(input); }
+  try {
+    const next = normalizeApplicationSource(input);
+    if (Array.isArray(previous?.events)) {
+      const currentEvents = new Map(next.events.map(event => [event.sourceEventId, event]));
+      for (const oldEvent of previous.events) {
+        const current = currentEvents.get(oldEvent.sourceEventId);
+        if (!current || JSON.stringify(current) !== JSON.stringify(oldEvent)) {
+          invalid('SOURCE_HISTORY_CHANGED', '이전에 확인한 신청 이력이 삭제되거나 변경되었습니다.');
+        }
+      }
+    }
+    return next;
+  }
   catch (error) { return failedApplicationSource(error, previous); }
 }

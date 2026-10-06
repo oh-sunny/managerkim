@@ -58,6 +58,17 @@ test('failed validation retains old snapshot and explicitly marks it stale', () 
   assert.equal(tryNormalizeApplicationSource({...base, targetRows:null}).applications, null);
 });
 
+test('a later sync cannot silently remove or rewrite an accepted history event', () => {
+  const previous = normalizeApplicationSource(base);
+  const removed = tryNormalizeApplicationSource({...base, eventRows:base.eventRows.slice(1)}, previous);
+  assert.equal(removed.sync.status, 'failed');
+  assert.equal(removed.sync.error.code, 'SOURCE_HISTORY_CHANGED');
+  assert.deepEqual(removed.events, previous.events);
+  const rewritten = tryNormalizeApplicationSource({...base, eventRows:base.eventRows.map(row =>
+    row.sourceEventId === 'evt-1' ? {...row, occurredAt:'2026-10-04T09:00:00+09:00'} : row)}, previous);
+  assert.equal(rewritten.sync.error.code, 'SOURCE_HISTORY_CHANGED');
+});
+
 test('sheet adapter maps configurable headers and reads both ranges in one server-side request', async () => {
   const requests = [];
   const result = await readGoogleSheetsApplicationSource({
