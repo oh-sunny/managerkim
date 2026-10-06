@@ -6,8 +6,8 @@ const statuses = { found:'후보 찾음', conflict:'서로 다른 정보', missi
 
 export function mountDocumentImport(root, { getValue, apply, loggedIn, login, saved=[] }) {
   let files = [], result = null, busy = false, version = 0, disposed = false, controller;
-  root.innerHTML = `<div class="document-heading"><div><p class="eyebrow">자료에서 시작하기</p><h2>여러 자료를 한 번에 읽고, 필요한 정보만 확인하세요</h2></div><span class="tag green">Gemma 분석</span></div>
-    <p class="help">기획서와 변경 안내를 함께 넣으면 공지에 필요한 정보와 서로 다른 내용을 찾습니다. 확인한 항목만 아래 운영 정보에 반영하세요.</p>
+  root.innerHTML = `<div class="document-heading"><div><h3>기획서에서 운영 정보 가져오기</h3></div></div>
+    <p class="help">자료에서 일정·대상·신청 방법을 찾습니다. 분석 결과를 확인한 뒤 적용해주세요.</p>
     <div class="document-upload"><label for="document-files">분석할 자료 추가</label><input id="document-files" type="file" multiple accept=".pdf,.docx,.txt,.md"><p class="caption muted">PDF · Word(DOCX) · TXT · MD / 최대 6개, 개별 2MB · 전체 2.8MB</p></div>
     <div id="document-file-list"></div>
     <div class="field"><label for="document-text">함께 참고할 내용 <span class="muted">선택</span></label><textarea id="document-text" class="short-textarea" maxlength="80000" placeholder="메일이나 메모의 내용을 붙여넣으세요."></textarea></div>
@@ -50,7 +50,7 @@ export function mountDocumentImport(root, { getValue, apply, loggedIn, login, sa
   }
   async function analyze() {
     if (busy) return;
-    if (!loggedIn()) { error('자료를 분석하려면 상단에서 Supabase 운영자 계정으로 로그인해주세요.'); login(); return; }
+    if (!loggedIn()) { error('자료를 분석하려면 저장 설정에서 로그인해주세요.'); login(); return; }
     const text = $('#document-text').value;
     if (!files.length && !text.trim()) { error('파일을 선택하거나 내용을 붙여넣어 주세요.'); return; }
     const token = ++version; result = null; $('#document-results').replaceChildren(); error(''); setBusy(true);
