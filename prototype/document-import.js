@@ -80,7 +80,7 @@ export function mountDocumentImport(root, { getValue, apply, loggedIn, login, sa
   }
   async function analyze() {
     if (busy) return;
-    if (!loggedIn()) { error('자료를 분석하려면 상단에서 Supabase 운영자 계정으로 로그인해주세요.'); login(); return; }
+    if (!loggedIn()) { error('자료를 분석하려면 저장 설정에서 로그인해주세요.'); login(); return; }
     const text = $('#document-text').value;
     if (!files.length && !text.trim()) { error('파일을 선택하거나 내용을 붙여넣어 주세요.'); return; }
     const token = ++version; result = null; $('#document-results').replaceChildren(); error(''); setBusy(true);

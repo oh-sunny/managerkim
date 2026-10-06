@@ -28,14 +28,16 @@ const assets = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ['/index.html', ['index.html', 'text/html; charset=utf-8']],
   ['/styles.css', ['styles.css', 'text/css; charset=utf-8']],
+  ['/fonts/PretendardVariable.woff2', ['fonts/PretendardVariable.woff2', 'font/woff2']],
   ['/document-import.css', ['document-import.css', 'text/css; charset=utf-8']],
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/data.js', ['data.js', 'text/javascript; charset=utf-8']],
+  ['/rule-engine.js', ['rule-engine.js', 'text/javascript; charset=utf-8']],
   ['/document-extract.js', ['document-extract.js', 'text/javascript; charset=utf-8']],
   ['/analysis-contract.js', ['analysis-contract.js', 'text/javascript; charset=utf-8']],
   ['/document-import.js', ['document-import.js', 'text/javascript; charset=utf-8']],
   ['/message-templates.js', ['message-templates.js', 'text/javascript; charset=utf-8']],
-  ['/rule-engine.js', ['rule-engine.js', 'text/javascript; charset=utf-8']],
+  ['/notice-draft.js', ['notice-draft.js', 'text/javascript; charset=utf-8']],
 ]);
 const requestedPort = process.env.PORT ?? '3000';
 if (!/^\d+$/.test(requestedPort) || Number(requestedPort) < 1 || Number(requestedPort) > 65535) {
