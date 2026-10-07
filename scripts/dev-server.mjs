@@ -7,6 +7,7 @@ import { createNoticeGenerator } from './notice-generation.mjs';
 import { createPublicHolidayCalendar } from './public-holidays.mjs';
 import { createGoogleSheetsService } from './google-sheets-service.mjs';
 import { DEFAULT_GEMINI_MODEL } from './gemini-config.mjs';
+import { createSlackDm } from './slack-dm.mjs';
 
 function localEnv() {
   try {
@@ -21,6 +22,7 @@ const env=localEnv();
 const handleApi=createSupabaseApi({
   url:process.env.SUPABASE_URL||env.SUPABASE_URL,
   key:process.env.SUPABASE_PUBLISHABLE_KEY||env.SUPABASE_PUBLISHABLE_KEY,
+  serviceKey:process.env.SUPABASE_SERVICE_ROLE_KEY||env.SUPABASE_SERVICE_ROLE_KEY,
   analyzer:createDocumentAnalyzer({apiKey:process.env.GEMINI_API_KEY||env.GEMINI_API_KEY,model:process.env.GEMINI_MODEL||env.GEMINI_MODEL||DEFAULT_GEMINI_MODEL}),
   noticeGenerator:createNoticeGenerator({apiKey:process.env.GEMINI_API_KEY||env.GEMINI_API_KEY,model:process.env.GEMINI_MODEL||env.GEMINI_MODEL||DEFAULT_GEMINI_MODEL}),
   holidayCalendar:createPublicHolidayCalendar(),
@@ -29,6 +31,7 @@ const handleApi=createSupabaseApi({
     clientEmail:process.env.GOOGLE_SHEETS_CLIENT_EMAIL||env.GOOGLE_SHEETS_CLIENT_EMAIL,
     privateKey:process.env.GOOGLE_SHEETS_PRIVATE_KEY||env.GOOGLE_SHEETS_PRIVATE_KEY,
   }),
+  slackDm:createSlackDm({token:process.env.SLACK_BOT_TOKEN||env.SLACK_BOT_TOKEN}),
 });
 
 const assets = new Map([
@@ -46,6 +49,7 @@ const assets = new Map([
   ['/message-templates.js', ['message-templates.js', 'text/javascript; charset=utf-8']],
   ['/notice-draft.js', ['notice-draft.js', 'text/javascript; charset=utf-8']],
   ['/send-preflight.js', ['send-preflight.js', 'text/javascript; charset=utf-8']],
+  ['/recipient-selection.js', ['recipient-selection.js', 'text/javascript; charset=utf-8']],
   ['/sheet-application-merge.js', ['sheet-application-merge.js', 'text/javascript; charset=utf-8']],
 ]);
 const requestedPort = process.env.PORT ?? '3000';

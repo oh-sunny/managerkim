@@ -1,10 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {BRIEF_FIELDS} from './notice-generation.mjs';
+import {buildSendPlan,SendPlanError} from './send-plan.mjs';
+import {sheetSendSnapshot} from '../prototype/send-preflight.js';
 
 const MIME = {pdf:'application/pdf',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',txt:'text/plain',md:'text/markdown',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg'};
 const MAX_JSON = 120_000;
 const MAX_FILE = 4_000_000;
 const draftIdOk = id => /^[a-z0-9-]{1,100}$/i.test(id);
+const uuidOk = id => /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(id);
 const json = (res,status,value) => {
   const body=Buffer.from(JSON.stringify(value));
   res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Content-Length':body.length,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
@@ -53,7 +56,7 @@ const validDraft = data => data && typeof data==='object' && !Array.isArray(data
     data.brief[key] && typeof data.brief[key].value==='string' && data.brief[key].value.length<=2000 &&
     typeof data.brief[key].included==='boolean' && typeof data.brief[key].source==='string'));
 
-export function createSupabaseApi({url='',key='',fetcher=fetch,analyzer=null,noticeGenerator=null,holidayCalendar=null,sheetService=null}={}) {
+export function createSupabaseApi({url='',key='',serviceKey='',fetcher=fetch,analyzer=null,noticeGenerator=null,holidayCalendar=null,sheetService=null,slackDm=null}={}) {
   const analyzing = new Set();
   const generating = new Set();
   let base='';
@@ -64,6 +67,9 @@ export function createSupabaseApi({url='',key='',fetcher=fetch,analyzer=null,not
     if(token)headers.Authorization=`Bearer ${token}`;
     return fetcher(`${base}${path}`,{...options,headers,signal:AbortSignal.timeout(15000)});
   };
+  const adminUpstream=async(path,options={})=>fetcher(`${base}${path}`,{
+    ...options,headers:{apikey:serviceKey,Authorization:`Bearer ${serviceKey}`,...options.headers},signal:AbortSignal.timeout(15000),
+  });
   const readUpstream=async response=>{
     const contentType=response.headers.get('content-type')||'';
     const raw=await response.text();
@@ -97,6 +103,61 @@ export function createSupabaseApi({url='',key='',fetcher=fetch,analyzer=null,not
     const response=await upstream('/rest/v1/operator_states?select=payload,version,updated_at&limit=1',{},token);
     if(!response.ok)throw new Error(`Supabase 운영 상태 조회 실패 (${response.status})`);
     return (await readUpstream(response))[0]||null;
+  };
+  const sendRow=async(table,filter,token)=>{
+    const response=await upstream(`/rest/v1/${table}?${filter}&select=*&limit=1`,{},token);
+    if(!response.ok)throw new Error(`${table} 조회 실패 (${response.status})`);
+    return (await readUpstream(response))[0]||null;
+  };
+  const sendResults=async(id,token)=>{
+    const response=await upstream(`/rest/v1/send_results?attempt_id=eq.${id}&select=employee_id,status,stage,reason,slack_user_id,channel_id,slack_ts,recorded_at&order=recorded_at.asc`,{},token);
+    if(!response.ok)throw new Error('발송 결과를 읽지 못했습니다.');
+    return await readUpstream(response);
+  };
+  const sendSummary=async(attempt,approval,token)=>{
+    const rows=await sendResults(attempt.id,token),recipients=approval.payload.recipients;
+    const byId=new Map(rows.map(row=>[row.employee_id,row]));
+    const results=recipients.map(({employeeId,name,email})=>{
+      const row=byId.get(employeeId);
+      return {employeeId,name,email,status:row?.status||'unknown',stage:row?.stage||'unrecorded',reason:row?.reason||null,
+        slackTs:row?.slack_ts||null};
+    });
+    const status=results.every(row=>row.status==='success')?'full_success':results.some(row=>row.status==='unknown')?'unknown':
+      results.every(row=>row.status==='failed')?'failed':'partial';
+    return {attemptId:attempt.id,approvalId:approval.id,status,results,createdAt:attempt.created_at,
+      sourceCheckedAt:attempt.source_checked_at};
+  };
+  const loadPlan=async(input,token)=>{
+    if(!draftIdOk(input?.draftId)||!Number.isInteger(input?.draftVersion)||input.draftVersion<1||
+       !Number.isInteger(input?.stateVersion)||input.stateVersion<1)throw new SendPlanError(400,'초안 ID와 저장 버전을 확인해주세요.');
+    const [draft,state]=await Promise.all([currentDraft(input.draftId,token),currentState(token)]);
+    return {plan:buildSendPlan({draft,state,draftId:input.draftId,draftVersion:input.draftVersion,stateVersion:input.stateVersion}),state};
+  };
+  const checkFreshSheet=async(plan,state)=>{
+    if(!sheetService?.configured)throw new SendPlanError(503,'Google Sheets 연결을 설정해주세요.');
+    let source;
+    try{source=await sheetService.read();}catch{throw new SendPlanError(502,'Google Sheets의 최신 신청 현황을 읽지 못해 발송을 중단했습니다.');}
+    if(source.spreadsheetId!==plan.spreadsheetId)throw new SendPlanError(409,'승인한 Google Sheets 원본과 현재 원본이 다릅니다.');
+    const teamByName=new Map();
+    for(const employee of state.payload.employees){
+      if(employee.teamName&&employee.team){
+        if(teamByName.has(employee.teamName)&&teamByName.get(employee.teamName)!==employee.team)throw new SendPlanError(409,'팀 정보를 확인할 수 없습니다.');
+        teamByName.set(employee.teamName,employee.team);
+      }
+    }
+    // The current client supports four known team IDs. Derive the mapping from
+    // saved imported roster, never from caller-supplied names.
+    if(!teamByName.size)throw new SendPlanError(409,'저장된 직원명부에 시트 팀 정보가 없습니다. 다시 가져와주세요.');
+    let latest;
+    try{latest=sheetSendSnapshot(source,plan.projectId,teamByName,
+      (state.payload.applicationEvents||[]).filter(event=>event.projectId===plan.projectId&&event.source!=='sheet'&&!String(event.id||'').startsWith('sheet:')));}
+    catch{throw new SendPlanError(409,'Google Sheets의 대상·신청 현황을 확인할 수 없습니다.');}
+    if(latest!==plan.sourceSnapshot)throw new SendPlanError(409,'신청 현황이나 대상 명단이 바뀌었습니다. 시트를 다시 가져온 뒤 승인해주세요.');
+    const currentEmail=new Map(source.employees.map(person=>[person.id,String(person.email||'').trim().toLowerCase()]));
+    if(plan.recipients.some(person=>currentEmail.get(person.employeeId)!==person.email)){
+      throw new SendPlanError(409,'수신자의 회사 이메일이 바뀌었습니다. 시트를 다시 가져온 뒤 승인해주세요.');
+    }
+    return source.sync.lastSuccessAt;
   };
 
   return async function handleApi(req,res,pathname) {
@@ -132,6 +193,73 @@ export function createSupabaseApi({url='',key='',fetcher=fetch,analyzer=null,not
       if(!auth){json(res,401,{error:'Supabase 계정으로 로그인해주세요.'});return;}
       if(pathname==='/api/auth/session' && req.method==='GET'){
         json(res,200,{user:{id:auth.user.id,email:auth.user.email}});return;
+      }
+      if(['/api/send/preview','/api/send/approve','/api/send/attempts'].includes(pathname)){
+        if(req.method!=='POST'){json(res,405,{error:'POST 요청을 사용해주세요.'});return;}
+        if(!String(req.headers['content-type']||'').includes('application/json')){json(res,415,{error:'JSON 요청이 필요합니다.'});return;}
+        const input=JSON.parse((await bytes(req,3000)).toString('utf8'));
+        if(pathname==='/api/send/preview'){
+          const {plan}=await loadPlan(input,auth.token);
+          json(res,200,{fingerprint:plan.fingerprint,draftId:plan.draftId,ticketId:plan.ticketId,projectId:plan.projectId,
+            draftVersion:plan.draftVersion,stateVersion:plan.stateVersion,body:plan.body,recipients:plan.recipients,
+            sourceCheckedAt:plan.sourceCheckedAt});return;
+        }
+        if(pathname==='/api/send/approve'){
+          if(!serviceKey){json(res,503,{error:'Supabase 서버 키를 설정해주세요.'});return;}
+          if(input.acknowledged!==true||!uuidOk(input.approvalId)||!/^[a-f0-9]{64}$/.test(input.fingerprint||'')){
+            json(res,400,{error:'승인 ID와 최종 확인 내용을 확인해주세요.'});return;
+          }
+          const {plan}=await loadPlan(input,auth.token);
+          if(plan.fingerprint!==input.fingerprint){json(res,409,{error:'본문이나 수신자가 바뀌었습니다. 미리보기를 다시 확인해주세요.'});return;}
+          const response=await adminUpstream('/rest/v1/send_approvals',{
+            method:'POST',headers:{'Content-Type':'application/json','Prefer':'return=representation'},
+            body:JSON.stringify({id:input.approvalId,owner_id:auth.user.id,payload:plan}),
+          });
+          if(!response.ok){json(res,response.status===409?409:502,{error:'발송 승인을 저장하지 못했습니다.'});return;}
+          json(res,201,{approvalId:input.approvalId,fingerprint:plan.fingerprint});return;
+        }
+        if(!uuidOk(input?.approvalId)||!uuidOk(input?.requestId)){json(res,400,{error:'승인 ID와 요청 ID를 확인해주세요.'});return;}
+        const approval=await sendRow('send_approvals',`id=eq.${input.approvalId}`,auth.token);
+        if(!approval){json(res,404,{error:'저장된 발송 승인이 없습니다.'});return;}
+        const existing=await sendRow('send_attempts',`approval_id=eq.${input.approvalId}`,auth.token);
+        if(existing){
+          if(existing.id!==input.requestId){json(res,409,{error:'이 승인은 이미 다른 요청으로 사용됐습니다. 결과를 확인해주세요.',attemptId:existing.id});return;}
+          json(res,200,await sendSummary(existing,approval,auth.token));return;
+        }
+        const ticketAttempt=await sendRow('send_attempts',`ticket_id=eq.${encodeURIComponent(approval.ticket_id||approval.payload.ticketId)}`,auth.token);
+        if(ticketAttempt){json(res,409,{error:'이 확인할 일은 이미 발송을 시도했습니다. 결과를 확인해주세요.',attemptId:ticketAttempt.id});return;}
+        if(!slackDm?.configured||!serviceKey){json(res,503,{error:'Slack 봇 토큰과 Supabase 서버 키를 설정해주세요.'});return;}
+        const stored=approval.payload;
+        const {plan,state}=await loadPlan(stored,auth.token);
+        if(plan.fingerprint!==stored.fingerprint){json(res,409,{error:'승인 후 초안이나 운영 정보가 바뀌었습니다. 다시 확인해주세요.'});return;}
+        const sourceCheckedAt=await checkFreshSheet(plan,state);
+        const claim=await adminUpstream('/rest/v1/rpc/claim_send_attempt',{
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({p_owner_id:auth.user.id,p_id:input.requestId,p_approval_id:input.approvalId,p_source_checked_at:sourceCheckedAt}),
+        });
+        if(!claim.ok){json(res,502,{error:'발송 요청을 기록하지 못해 전송을 시작하지 않았습니다.'});return;}
+        if(await readUpstream(claim)!==true){
+          const claimed=await sendRow('send_attempts',`approval_id=eq.${input.approvalId}`,auth.token);
+          if(claimed?.id===input.requestId){json(res,200,await sendSummary(claimed,approval,auth.token));return;}
+          const competing=claimed||await sendRow('send_attempts',`ticket_id=eq.${encodeURIComponent(plan.ticketId)}`,auth.token);
+          json(res,409,{error:'이 확인할 일은 이미 다른 요청으로 발송을 시도했습니다.',attemptId:competing?.id||null});return;
+        }
+        // An attempt is claimed once. Never repeat an uncertain Slack call.
+        for(const person of plan.recipients){
+          let result;
+          try{result=await slackDm.sendText({email:person.email,body:plan.body});}
+          catch{result={status:'unknown',stage:'provider',reason:'provider_exception'};}
+          const outcome=['success','failed','unknown'].includes(result?.status)?result:{status:'unknown',stage:'provider',reason:'invalid_result'};
+          const saved=await adminUpstream('/rest/v1/rpc/record_send_result',{
+            method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({p_owner_id:auth.user.id,p_attempt_id:input.requestId,p_employee_id:person.employeeId,p_status:outcome.status,
+              p_stage:outcome.stage||'provider',p_reason:outcome.reason||null,p_slack_user_id:outcome.slackUserId||null,
+              p_channel_id:outcome.channelId||null,p_slack_ts:outcome.ts||null}),
+          });
+          if(!saved.ok){json(res,502,{error:'발송 결과 저장에 실패했습니다. 누락된 결과는 불명으로 취급하고 자동 재전송하지 마세요.',attemptId:input.requestId});return;}
+        }
+        const attempt={id:input.requestId,created_at:new Date().toISOString(),source_checked_at:sourceCheckedAt};
+        json(res,200,await sendSummary(attempt,approval,auth.token));return;
       }
       if(pathname==='/api/sheets/sync'){
         if(req.method!=='POST'){json(res,405,{error:'POST 요청을 사용해주세요.'});return;}
