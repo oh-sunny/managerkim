@@ -8,6 +8,7 @@
 # Dependencies and generated files
 node_modules/
 .vercel/
+supabase/.temp/
 .next/
 dist/
 build/
