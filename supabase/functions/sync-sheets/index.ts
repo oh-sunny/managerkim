@@ -73,9 +73,10 @@ async function run() {
 Deno.serve(async request => {
   if (request.method !== 'POST') return json(405, {error: 'POST 요청만 허용합니다.'});
   const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  const cronKey = Deno.env.get('SYNC_CRON_SERVICE_KEY');
   const bearer = request.headers.get('authorization') || '';
   if (!key) return json(503, {error: '동기화 서비스 설정이 없습니다.'});
-  if (bearer !== `Bearer ${key}`) {
+  if (bearer !== `Bearer ${key}` && (!cronKey || bearer !== `Bearer ${cronKey}`)) {
     const base = Deno.env.get('SUPABASE_URL');
     if (!base || !bearer.startsWith('Bearer ')) return json(401, {error: '로그인이 필요합니다.'});
     const response = await fetch(`${base}/auth/v1/user`, {headers: {apikey: key, Authorization: bearer}});

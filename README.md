@@ -8,7 +8,7 @@ HTML·CSS·JavaScript와 Node.js 정적 서버로 실행합니다. 현재 가능
 
 - 프로젝트 등록·수정, 이름·팀 검색을 통한 대상·필수 동료 선택
 - 신청·취소·확정 상태 변경과 현황·DM 대상 재계산
-- Google Sheets 직원명부·프로젝트·대상·신청이력 네 탭의 읽기 전용 수동 동기화
+- Google Sheets 직원명부·프로젝트·대상·신청이력 네 탭의 읽기 전용 수동·시간별 동기화
 - 프로젝트·신청 이력·티켓·보낸 안내의 Supabase 저장과 변경 버전 기록
 - 공식 공휴일을 반영한 규칙 티켓 생성·갱신, 보류·안내하지 않기와 사유 기록
 - 수정 가능한 공지 정보 카드, 카드 기반 Gemini 초안 생성·사실 검증, 현재 본문과 새 초안 비교, 팀별 DM 대상 또는 채널 선택, 모의 발송
@@ -17,7 +17,7 @@ HTML·CSS·JavaScript와 Node.js 정적 서버로 실행합니다. 현재 가능
 - 원문을 길게 복사하는 대신 공지 목적·대상·신청 절차를 짧게 편집하고, 근거와 수정 입력은 필요할 때 펼쳐 확인
 - 스캔 PDF 자동 OCR과 PDF 전체 이미지 읽기, 적용한 정보의 근거·시각을 프로젝트와 함께 계정별 Supabase 상태에 저장
 
-초기 동료 명단과 기존 티켓 일부는 예시 데이터입니다. 새 프로젝트는 공개 공휴일 달력을 조회한 뒤 규칙으로 티켓을 만듭니다. Google Sheets 서비스 계정으로 예시 시트의 네 탭을 실제 조회·정규화했으며, 로그인한 운영자가 화면에서 수동으로 가져오는 경로를 구현했습니다. 화면 버튼부터 Supabase 저장·복원까지의 전체 흐름은 별도 검증이 필요합니다. Slack 전송과 서버의 주기 실행은 아직 연결되지 않았으며 메시지는 실제로 보내지 않습니다.
+초기 동료 명단과 기존 티켓 일부는 예시 데이터입니다. 새 프로젝트는 공개 공휴일 달력을 조회한 뒤 규칙으로 티켓을 만듭니다. `managerkim` Supabase 프로젝트에서는 예시 시트 네 탭을 읽는 Edge Function과 매시간 Cron을 활성화했습니다. 2026-10-07에 수동 호출과 임시 예약 작업의 성공·저장 결과를 확인했습니다. 로그인한 운영자의 화면 버튼부터 Supabase 복원까지의 브라우저 전체 흐름과 첫 매시간 정시 실행은 별도 확인이 필요합니다. Slack 메시지는 실제로 보내지 않습니다.
 
 ## 로컬 실행
 
@@ -49,14 +49,16 @@ npm run dev
 
 직원명부는 회사의 전체 사원 명부이며 `대상` 탭은 프로젝트마다 그중 누구를 신청 대상으로 삼는지 나타냅니다. `employeeId`는 네 탭을 잇는 고정 ID이고 `사번`은 사람이 확인하기 쉬운 값입니다. 이력의 `occurredAt`은 `2026-10-03 16:00:00 KST` 형식을 사용합니다. 이전 사건 행을 수정·삭제하지 않고 새 사건을 마지막 행에 추가해야 재신청 순서까지 보존됩니다.
 
-웹앱 서버가 비공개 시트를 읽으려면 Google Cloud에서 **Sheets API를 활성화하고 서비스 계정을 만든 뒤**, 시트를 그 서비스 계정 이메일에 **뷰어**로 공유합니다. [Google 서비스 계정 안내](https://developers.google.com/identity/protocols/oauth2/service-account)처럼 서버가 읽기 전용 접근 토큰을 발급받습니다. `.env` 또는 Vercel 환경 변수에 `GOOGLE_SHEETS_SPREADSHEET_ID`, `GOOGLE_SHEETS_CLIENT_EMAIL`, `GOOGLE_SHEETS_PRIVATE_KEY`를 설정합니다. 개인 키의 줄바꿈은 한 줄의 `\n`으로 입력하고 키 파일은 Git에 넣지 않습니다. 현재 로컬 설정으로 네 탭의 실제 조회와 정규화가 성공했습니다. 홈 화면의 **시트에서 가져오기**는 로그인한 운영자가 누를 때 네 탭을 함께 읽고 직원명부·대상·신청 이력을 갱신합니다. 시트의 프로젝트 ID는 웹앱에 먼저 등록돼 있어야 합니다. 실패하면 오류를 표시하며, 정기 자동 동기화는 아직 없습니다. 다른 실행 환경에서는 서비스 계정 설정과 시트 공유 권한을 따로 준비해야 합니다.
+새 행사를 시트와 연결하려면 웹앱의 **프로젝트 등록 → Google Sheets 프로젝트 ID**에 시트 `프로젝트` 탭의 `projectId`와 같은 값을 입력하고 운영 정보를 저장합니다. `대상`·`신청이력` 탭에도 같은 ID를 씁니다. ID를 비워 두면 웹앱이 내부 ID를 생성하며, 등록 후 ID는 화면에서 바꿀 수 없습니다. 저장이 완료된 뒤 **지금 가져오기**를 누르거나 매시간 동기화를 기다리면 대상·신청 상태와 티켓을 갱신합니다. 시트에 웹앱에 없는 ID가 먼저 생기면 동기화가 오류로 멈추므로 해당 프로젝트를 등록한 뒤 다시 실행해야 합니다. 이 새 프로젝트 연결 흐름은 아직 실제 브라우저와 배포 사이트에서 확인하지 않았습니다.
+
+웹앱 서버가 비공개 시트를 읽으려면 Google Cloud에서 **Sheets API를 활성화하고 서비스 계정을 만든 뒤**, 시트를 그 서비스 계정 이메일에 **뷰어**로 공유합니다. [Google 서비스 계정 안내](https://developers.google.com/identity/protocols/oauth2/service-account)처럼 서버가 읽기 전용 접근 토큰을 발급받습니다. `.env` 또는 Vercel 환경 변수에 `GOOGLE_SHEETS_SPREADSHEET_ID`, `GOOGLE_SHEETS_CLIENT_EMAIL`, `GOOGLE_SHEETS_PRIVATE_KEY`를 설정합니다. 개인 키의 줄바꿈은 한 줄의 `\n`으로 입력하고 키 파일은 Git에 넣지 않습니다. 현재 로컬 설정으로 네 탭의 실제 조회와 정규화가 성공했습니다. 홈 화면의 **지금 가져오기**는 로그인한 운영자가 누를 때 Supabase Edge Function으로 네 탭을 다시 읽고 저장된 스냅샷·티켓을 갱신합니다. 시트의 프로젝트 ID는 웹앱에 먼저 등록돼 있어야 합니다. 실패하면 오류를 표시합니다. `managerkim` 프로젝트의 시간별 작업은 활성화됐습니다. 다른 실행 환경에서는 서비스 계정 설정과 시트 공유 권한을 따로 준비해야 합니다.
 
 운영 정보를 바꾸려면 Supabase 운영자 로그인이 필요합니다. 프로젝트·대상 명단·신청/취소 사유·티켓·안내 기록은 계정별 `operator_states`에 저장하고 각 버전을 `operator_state_revisions`에 남깁니다. 브라우저에는 복원용 캐시가 남습니다. 여러 탭의 버전이 다르면 덮어쓰기 전에 충돌을 표시합니다. 발송 확인 체크는 저장하지 않으며, 새로고침 뒤 최종 확인을 다시 해야 합니다.
 
 ## Supabase 운영 정보·초안·파일 저장 설정
 
 1. [`.env.example`](.env.example)을 참고해 Git에서 제외되는 `.env`에 `SUPABASE_URL`과 `SUPABASE_PUBLISHABLE_KEY`를 입력합니다. secret/service role 키는 넣지 않습니다.
-2. 현재 연결된 Supabase 프로젝트에는 [`supabase/migrations/20261006015431_notice_drafts_and_resources.sql`](supabase/migrations/20261006015431_notice_drafts_and_resources.sql)과 [`supabase/migrations/20261006090000_operator_state.sql`](supabase/migrations/20261006090000_operator_state.sql)이 적용됐습니다. 다른 Supabase 프로젝트에도 두 마이그레이션을 적용해야 합니다.
+2. 현재 연결된 Supabase 프로젝트에는 `supabase/migrations/`의 초안·운영 상태·예약 시트 동기화·Cron 확장 마이그레이션 네 개가 적용됐습니다. 다른 Supabase 프로젝트에는 해당 마이그레이션과 아래 예약 작업 설정을 별도로 적용해야 합니다.
 3. Supabase Authentication에 운영자 계정을 준비하고 `npm run dev`로 서버를 다시 시작합니다. 상단 **Supabase 로그인**에서 그 계정으로 로그인합니다.
 
 로그인 후 운영 정보와 안내 초안은 각각 `operator_states`, `notice_drafts`에 자동 저장되며 저장 상태와 버전 충돌을 화면에 표시합니다. 첨부 파일은 비공개 `notice-files` 버킷과 `notice_resources`에 저장됩니다. Sheets에서 가져온 프로젝트는 모의 발송 버튼을 누를 때 서버가 시트를 다시 읽습니다. 승인 당시의 신청 상태·대상 명단과 다르거나 조회에 실패하면 발송을 막고 확인을 다시 요구합니다. 모의 발송의 본문·대상·자료 목록과 마지막 원본 조회 시각도 운영 기록에 저장합니다. 계정별 저장 구조이므로 조직의 여러 운영자 계정 사이에 데이터를 공유하는 권한 모델은 아직 없습니다.
@@ -189,9 +191,9 @@ npm run dev
 `tests/`, `supabase/migrations/`, `.env`, `.git/`는 테스트와 입력 자료, DB 재구성 이력, 로컬 연결 설정, 버전 이력을 각각 보관합니다.
 
 추가로 구조를 정리한다면 `scripts/`의 서버 모듈을 `server/`로 분리하고, `spec/`을 `docs/spec/`으로 합칠 수 있습니다. 실제 이동 시 import·문서 링크와 로컬·Vercel 실행 경로를 함께 수정해야 합니다.
-# Supabase 시간별 시트 동기화 (작업 브랜치)
+# Supabase 시간별 시트 동기화
 
-`codex/supabase-scheduled-sync`에서는 웹앱이 Supabase Auth에 직접 로그인하고,
+웹앱은 Supabase Auth에 직접 로그인하고,
 `operator_states`, `notice_drafts`, `sheet_sync_snapshots`, `automation_tickets`를
 사용자 JWT와 RLS로 직접 읽습니다. 안내 파일도 사용자 JWT로 Supabase Storage에
 직접 올리고 `notice_resources`에 기록합니다. Vercel API는 Gemini 분석·생성에
@@ -203,10 +205,11 @@ Supabase URL은 `/api/status`가 전달합니다. 비밀번호와 service role k
 성공한 최신 스냅샷은 한 행만 갱신하며, `sheet_application_events`에는 처음 본 사건만
 추가합니다. 이미 저장한 사건이 시트에서 사라지거나 바뀌면 동기화를 중단합니다.
 
-원격 활성화 순서:
+다른 Supabase 프로젝트에 활성화할 때의 순서:
 
-1. `supabase/migrations/20261007120000_scheduled_sheet_sync.sql`을 적용합니다.
+1. `supabase/migrations/20261007120000_scheduled_sheet_sync.sql`과 `20261007130000_cron_extensions.sql`을 적용합니다.
 2. Supabase Edge Function Secrets에 `SYNC_OWNER_ID`(운영자 Auth UUID),
+   `SYNC_CRON_SERVICE_KEY`(프로젝트의 legacy service_role JWT),
    `GOOGLE_SHEETS_SPREADSHEET_ID`, `GOOGLE_SHEETS_CLIENT_EMAIL`,
    `GOOGLE_SHEETS_PRIVATE_KEY`를 설정합니다. 로컬 형식은
    `supabase/functions/.env.example`을 참고합니다. 서비스 계정에는 해당 시트의
@@ -214,12 +217,15 @@ Supabase URL은 `/api/status`가 전달합니다. 비밀번호와 service role k
 3. `npm run build:edge`로 공통 규칙 코드를 함수 폴더에 복사한 다음
    `supabase functions deploy sync-sheets`로 배포하고, 운영자 로그인 후
    웹앱의 **지금 가져오기**를 눌러 `sheet_sync_runs`와 화면을 확인합니다.
-4. Supabase Dashboard에서 Cron과 `pg_net`을 활성화합니다. Vault에
+4. Cron과 `pg_net`이 활성화됐는지 확인합니다. Vault에
    `sheet_sync_function_url`(함수 전체 URL)과 `sheet_sync_service_key`(legacy
    service_role JWT)를 추가합니다. 비밀값을 SQL 파일이나 Git에 넣지 않습니다.
 5. `supabase/cron-hourly.sql`을 실행합니다. 매시 정각(UTC)에 한 번 실행됩니다.
    `sheet_sync_runs`의 마지막 성공 시각과 오류, Cron 실행 기록을 확인합니다.
 
-`SUPABASE_SERVICE_ROLE_KEY`는 Edge Function 런타임이 주입합니다. Cron이 함수에
-전달할 토큰은 Vault에만 저장합니다. `SYNC_OWNER_ID`는 현재 개인 프로젝트의
+`SUPABASE_SERVICE_ROLE_KEY`는 Edge Function 런타임이 DB 접근용으로 주입합니다. Cron이 함수에
+전달할 legacy service_role JWT는 함수의 `SYNC_CRON_SERVICE_KEY`와 Vault의
+`sheet_sync_service_key`에만 저장합니다. `SYNC_OWNER_ID`는 현재 개인 프로젝트의
 단일 운영자 연결을 위한 설정이며, 다른 운영자와 공유하는 모델은 별도 설계가 필요합니다.
+
+2026-10-07 `managerkim` 프로젝트에서는 마이그레이션·함수·비밀값·Vault·시간별 Cron을 적용했습니다. 직접 함수 호출은 직원 160명·신청 사건 17건을 읽고 새 사건 17건과 티켓 3건을 저장했습니다. 임시 1분 예약 작업도 성공해 재실행에서 새 사건 0건을 확인한 뒤 제거했습니다. 현재는 `sheet-sync-hourly`만 활성입니다. 첫 매시간 정시 실행과 운영자 브라우저의 **지금 가져오기 → 화면 갱신·새로고침 복원**은 별도 확인이 필요합니다.
