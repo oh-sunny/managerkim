@@ -167,7 +167,7 @@ API 이름은 구현 시 정한다. 업무 단위로 보면 `파일 업로드/�
 
 ### Google Drive 신청 원본 동기화
 
-현재 서버는 환경 변수의 스프레드시트 ID와 읽기 전용 서비스 계정으로 네 탭을 한 번에 읽는다. `managerkim` Supabase의 Edge Function은 매시간 같은 예시 시트를 읽어 `sheet_sync_snapshots`, `sheet_application_events`, `automation_tickets`, `sheet_sync_runs`에 반영한다. 임시 예약 실행은 성공했고 첫 매시간 정시 실행과 브라우저 반영·복원은 미확인이다. 운영자가 화면에서 시트 ID나 범위를 등록하는 기능은 없다. 다음은 실제 조직 원본까지 확장할 때의 동기화 계약이다.
+현재 서버는 환경 변수의 스프레드시트 ID와 읽기 전용 서비스 계정으로 네 탭을 한 번에 읽는다. `managerkim` Supabase의 Edge Function은 매시간 같은 예시 시트를 읽어 `sheet_sync_snapshots`, `sheet_application_events`, `automation_tickets`, `sheet_sync_runs`에 반영한다. 임시 예약 실행은 성공했고 첫 매시간 정시 실행과 브라우저 반영·복원은 미확인이다. 새 프로젝트 등록 화면에는 시트의 `projectId`와 맞출 입력란이 있지만, 운영자가 스프레드시트 ID나 범위를 화면에서 등록하는 기능은 없다. 다음은 실제 조직 원본까지 확장할 때의 동기화 계약이다.
 
 1. 운영자가 사용할 원본 시트와 접근 범위를 확정한다. 서버는 Sheets API로 지정한 셀 값을 읽는다. 실제 조직 자료를 적용할 때는 서비스 계정의 공유 범위와 열 구조를 검증한다.
 2. 원본은 우선 **읽기 전용**으로 연결한다. 대상 명단, 최신 상태, 신청·취소 이력 행의 열 의미를 확인한다. 각 이력 행은 안정적인 사건 ID, 프로젝트 ID, 변하지 않는 동료 ID, 상태(`applied`/`confirmed`/`cancelled`), 발생 시각을 가져야 한다. 이름이나 시트의 행 번호를 영구 ID로 사용하지 않는다. 원본이 현재 상태도 별도로 제공하면 이력에서 계산한 결과와 대조한다.
