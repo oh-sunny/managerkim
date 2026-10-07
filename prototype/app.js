@@ -4,6 +4,7 @@ import {mountDocumentImport} from './document-import.js';
 import {evaluateReminderTickets} from './rule-engine.js';
 import {NOTICE_PURPOSES,BRIEF_LABELS,makeNoticeBrief,generationSignature,acceptNoticeCandidate} from './notice-draft.js';
 import {projectSendSnapshot,sheetSendSnapshot} from './send-preflight.js';
+import {mergeSheetApplications} from './sheet-application-merge.js';
 const $ = selector => document.querySelector(selector);
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const icons = {
@@ -325,7 +326,7 @@ async function initializeSheetSource(){
 function sheetSourcePanel(){
   const link=sheetSourceStatus.spreadsheetId?`<a href="https://docs.google.com/spreadsheets/d/${encodeURIComponent(sheetSourceStatus.spreadsheetId)}/edit" target="_blank" rel="noopener noreferrer">예시 스프레드시트 열기 ${icon('external')}</a>`:'';
   const last=sheetSync?.lastSuccessAt?new Date(sheetSync.lastSuccessAt).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}):null;
-  return `<section class="panel sheet-source-panel"><div><h2>Google 스프레드시트 원본</h2><p class="caption muted">직원명부·프로젝트·대상·신청이력 네 탭을 읽어 현재 신청 현황을 갱신합니다.</p><p class="caption">${sheetSyncError?escapeHtml(sheetSyncError):last?`마지막 가져오기: ${escapeHtml(last)} · 직원 ${sheetSync.employeeCount}명 · 이력 ${sheetSync.eventCount}건`:sheetSourceStatus.configured?'아직 가져오지 않았어요.':'웹앱의 Google Sheets 읽기 권한 설정이 필요합니다.'}</p>${link}</div><button class="button" data-action="sync-sheet" ${sheetSyncBusy||!sheetSourceStatus.configured||!cloudUser?'disabled':''}>${sheetSyncBusy?'가져오는 중…':'시트에서 가져오기'}</button></section>`;
+  return `<section class="panel sheet-source-panel"><div><h2>Google 스프레드시트 원본</h2><p class="caption muted">버튼을 누를 때 직원명부·프로젝트·대상·신청이력 네 탭을 읽습니다. 자동 갱신은 아직 없습니다.</p><p class="caption">${sheetSyncError?escapeHtml(sheetSyncError):last?`마지막 가져오기: ${escapeHtml(last)} · 직원 ${sheetSync.employeeCount}명 · 이력 ${sheetSync.eventCount}건`:sheetSourceStatus.configured?'아직 가져오지 않았어요.':'웹앱의 Google Sheets 읽기 권한 설정이 필요합니다.'}</p>${link}</div><button class="button" data-action="sync-sheet" ${sheetSyncBusy||!sheetSourceStatus.configured||!cloudUser?'disabled':''}>${sheetSyncBusy?'가져오는 중…':'시트에서 가져오기'}</button></section>`;
 }
 function applySheetSource(source){
   if(source?.sync?.status!=='success'||!Array.isArray(source.employees)||!Array.isArray(source.sourceProjects)||!Array.isArray(source.projectTargets)||!Array.isArray(source.events)||!Array.isArray(source.applications))throw new Error('시트의 데이터 형식을 확인해주세요.');
@@ -343,13 +344,14 @@ function applySheetSource(source){
     ...project,targetIds:targetByProject.get(project.id)?.targetIds||[],requiredIds:targetByProject.get(project.id)?.requiredIds||[],
     dataKind:'sheet',lastCheckedAt:kstTime(source.sync.lastSuccessAt),
   }:project);
-  const nextApplications=[...applications.filter(row=>!projectIds.has(row.projectId)),...source.applications];
+  const operatorEvents=applicationEvents.filter(event=>projectIds.has(event.projectId)&&event.source!=='sheet'&&!String(event.id).startsWith('sheet:'));
+  const nextApplications=[...applications.filter(row=>!projectIds.has(row.projectId)),...mergeSheetApplications(source.applications,source.events,operatorEvents)];
   const prior=new Map();
   const importedEvents=source.events.map(event=>{
     const key=`${event.projectId}:${event.employeeId}`,fromStatus=prior.get(key)||'none';
     prior.set(key,event.status);
     return {id:`sheet:${event.sourceEventId}`,projectId:event.projectId,employeeId:event.employeeId,
-      fromStatus,toStatus:event.status,reason:event.reason||'',actor:'Google Sheets',at:kstTime(event.occurredAt)};
+      fromStatus,toStatus:event.status,reason:event.reason||'',actor:'Google Sheets',source:'sheet',at:kstTime(event.occurredAt)};
   });
   for(const project of nextProjects.filter(item=>item.dataKind==='sheet')){
     projectSendSnapshot(project,importedEmployees,nextApplications);
@@ -361,7 +363,7 @@ function applySheetSource(source){
     if(d.confirmedSourceSnapshot!==latest||d.confirmedSpreadsheetId!==source.spreadsheetId){d.confirmed=false;d.confirmedSignature='';d.confirmedSourceSnapshot='';d.confirmedSpreadsheetId='';}
   }
   EMPLOYEES=importedEmployees;PROJECTS=nextProjects;applications=nextApplications;
-  applicationEvents=[...applicationEvents.filter(event=>!projectIds.has(event.projectId)),...importedEvents];
+  applicationEvents=[...applicationEvents.filter(event=>!projectIds.has(event.projectId)),...importedEvents,...operatorEvents];
   TICKETS.forEach(ticket=>{if(projectIds.has(ticket.project)&&!ticket.key&&['pending','scheduled'].includes(ticket.state)){ticket.state='retired';ticket.lifecycleReason='Google Sheets 원본으로 현황 갱신';}});
   sheetSync={spreadsheetId:source.spreadsheetId,lastSuccessAt:source.sync.lastSuccessAt,employeeCount:importedEmployees.length,eventCount:source.events.length};
   persist();render();void refreshOfficialCalendarAndTickets();
@@ -371,7 +373,7 @@ async function syncSheetSource(){
   sheetSyncBusy=true;sheetSyncError='';render();
   try{applySheetSource(await cloudRequest('/api/sheets/sync',{method:'POST'}));toast('Google Sheets의 직원명부와 신청 이력을 가져왔어요.');}
   catch(error){sheetSyncError=error.message||'시트를 읽지 못했습니다.';render();}
-  finally{sheetSyncBusy=false;if(route().view==='home')render();}
+  finally{sheetSyncBusy=false;render();}
 }
 const cloudPayload = d => ({body:d.body,purpose:d.purpose,tone:d.tone,mode:d.mode,scope:d.scope,teams:d.teams,dmSelection:d.dmSelection,selectedIds:d.selectedIds,channels:d.channels,resources:d.resources||[],brief:d.brief,briefStale:d.briefStale===true,generatedAt:d.generatedAt||null,generatedModel:d.generatedModel||null});
 function cloudLabel(t) {
@@ -666,7 +668,7 @@ function historyRows(list) {
 }
 const recordKind = r => r.kind || (/D-\d|리마인드|마감 전|추가 안내|한 번 더/.test(`${r.title} ${getTicket(r.ticket)?.title||''}`)?'reminder':'initial');
 function rosterMarkup(p,s) {
-  return `<section class="panel roster-panel"><div class="panel-heading"><div><h2>대상자별 신청 상태</h2><p class="caption muted">${s.lastCheckedAt?'최근 확인 '+escapeHtml(s.lastCheckedAt.replace('T',' ')):'아직 확인하지 않음'} · ${p.confirmationMode==='separate'?'별도 승인 후 확정':'신청 즉시 확정'}</p></div></div><div class="roster-filters"><div class="field"><label for="roster-search">이름·팀 검색</label><input id="roster-search" type="search" placeholder="이름 또는 팀" value="${escapeHtml(rosterSearch)}"></div><div class="field"><label for="roster-filter">신청 상태</label><select id="roster-filter">${[['all','전체'],['pending','미신청'],['required','필수 · 미신청'],['applied','신청 완료'],['waiting','확정 대기']].map(([value,label])=>`<option value="${value}" ${rosterFilter===value?'selected':''}>${label}</option>`).join('')}</select></div><span id="roster-count" class="caption muted" role="status"></span></div>${s.unknown.length?`<p class="error-message">대상을 확인할 수 없는 기록 ${s.unknown.length}건은 집계에서 제외했습니다.</p>`:''}<div class="roster-list">${s.targetIds.map(employeeId=>{const e=EMPLOYEES.find(item=>item.id===employeeId),applied=s.appliedIds.includes(employeeId),confirmed=s.confirmedIds.includes(employeeId),required=s.requiredIds.includes(employeeId),team=TEAMS.find(t=>t.id===e.team).name;return `<div class="roster-row" data-roster-row data-search="${escapeHtml(e.name+' '+team)}" data-applied="${applied}" data-confirmed="${confirmed}" data-required="${required}"><div><strong>${escapeHtml(e.name)}</strong><small>${escapeHtml(team)}${required?' · 필수 대상':''}</small></div>${tag(confirmed?'확정':applied?'확정 대기':'미신청',confirmed?'green':applied?'gray':'orange')}<div class="actions">${!applied?`<button class="button compact" data-application="applied" data-employee="${employeeId}" data-project="${p.id}" aria-label="${escapeHtml(e.name)} 신청 처리">신청 처리</button>`:`${p.confirmationMode==='separate'&&!confirmed?`<button class="button compact" data-application="confirmed" data-employee="${employeeId}" data-project="${p.id}" aria-label="${escapeHtml(e.name)} 확정 처리">확정 처리</button>`:''}<button class="button compact" data-application="cancelled" data-employee="${employeeId}" data-project="${p.id}" aria-label="${escapeHtml(e.name)} 신청 취소">신청 취소</button>`}</div></div>`;}).join('')}</div><p id="roster-empty" class="empty" hidden>조건에 맞는 동료가 없습니다.</p>${applicationLog(p.id)}</section>`;
+  return `<section class="panel roster-panel"><div class="panel-heading"><div><h2>대상자별 신청 상태</h2><p class="caption muted">${p.dataKind==='sheet'?'마지막 시트 가져오기':'최근 확인'} ${s.lastCheckedAt?escapeHtml(s.lastCheckedAt.replace('T',' ')):'없음'} · ${p.confirmationMode==='separate'?'별도 승인 후 확정':'신청 즉시 확정'}</p>${p.dataKind==='sheet'?`<p class="caption muted">시트는 자동 갱신되지 않습니다. 여기서 바꾼 상태는 Supabase에 저장되며 시트에는 기록되지 않습니다.</p>`:''}</div>${p.dataKind==='sheet'?`<button class="button compact" data-action="sync-sheet" ${sheetSyncBusy||!sheetSourceStatus.configured||!cloudUser?'disabled':''}>${sheetSyncBusy?'가져오는 중…':'시트 다시 가져오기'}</button>`:''}</div>${p.confirmationMode==='immediate'&&s.appliedIds.length>s.confirmedIds.length?'<p class="error-message">신청 즉시 확정 프로젝트에 확정 대기 기록이 있습니다. 시트의 신청 상태를 확인하거나 아래에서 확정 처리해주세요.</p>':''}<div class="roster-filters"><div class="field"><label for="roster-search">이름·팀 검색</label><input id="roster-search" type="search" placeholder="이름 또는 팀" value="${escapeHtml(rosterSearch)}"></div><div class="field"><label for="roster-filter">신청 상태</label><select id="roster-filter">${[['all','전체'],['pending','미신청'],['required','필수 · 미신청'],['applied','신청 완료'],['waiting','확정 대기']].map(([value,label])=>`<option value="${value}" ${rosterFilter===value?'selected':''}>${label}</option>`).join('')}</select></div><span id="roster-count" class="caption muted" role="status"></span></div>${s.unknown.length?`<p class="error-message">대상을 확인할 수 없는 기록 ${s.unknown.length}건은 집계에서 제외했습니다.</p>`:''}<div class="roster-list">${s.targetIds.map(employeeId=>{const e=EMPLOYEES.find(item=>item.id===employeeId),applied=s.appliedIds.includes(employeeId),confirmed=s.confirmedIds.includes(employeeId),required=s.requiredIds.includes(employeeId),team=TEAMS.find(t=>t.id===e.team).name;return `<div class="roster-row" data-roster-row data-search="${escapeHtml(e.name+' '+team)}" data-applied="${applied}" data-confirmed="${confirmed}" data-required="${required}"><div><strong>${escapeHtml(e.name)}</strong><small>${escapeHtml(team)}${required?' · 필수 대상':''}</small></div>${tag(confirmed?'확정':applied?'확정 대기':'미신청',confirmed?'green':applied?'gray':'orange')}<div class="actions">${!applied?`<button class="button compact" data-application="applied" data-employee="${employeeId}" data-project="${p.id}" aria-label="${escapeHtml(e.name)} 신청 처리">신청 처리</button>`:`${!confirmed?`<button class="button compact" data-application="confirmed" data-employee="${employeeId}" data-project="${p.id}" aria-label="${escapeHtml(e.name)} 확정 처리">확정 처리</button>`:''}<button class="button compact" data-application="cancelled" data-employee="${employeeId}" data-project="${p.id}" aria-label="${escapeHtml(e.name)} 신청 취소">신청 취소</button>`}</div></div>`;}).join('')}</div><p id="roster-empty" class="empty" hidden>조건에 맞는 동료가 없습니다.</p>${applicationLog(p.id)}</section>`;
 }
 function filterRoster() {
   if(!$('#roster-count'))return;
@@ -847,8 +849,8 @@ function recordApplicationChange(project,employeeId,toStatus,reason='') {
   if(fromStatus===toStatus)return false;
   const at=checkedAt();
   applications=setApplication(applications,project.id,employeeId,toStatus,at);
-  applicationEvents.push({id:crypto.randomUUID(),projectId:project.id,employeeId,fromStatus,toStatus,reason,actor:cloudUser?.email||'로컬 운영자',at});
-  project.lastCheckedAt=at;project.dataKind='local';
+  applicationEvents.push({id:crypto.randomUUID(),projectId:project.id,employeeId,fromStatus,toStatus,reason,actor:cloudUser?.email||'로컬 운영자',source:'operator',at});
+  if(project.dataKind!=='sheet'){project.lastCheckedAt=at;project.dataKind='local';}
   Object.values(drafts).forEach(d=>d.confirmed=false);
   persist();render();void refreshOfficialCalendarAndTickets();return true;
 }
