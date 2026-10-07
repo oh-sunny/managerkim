@@ -21,6 +21,7 @@ __pycache__/
 
 # Local logs and OS metadata
 *.log
+*.inspect.ndjson
 .DS_Store
 Thumbs.db
 Desktop.ini

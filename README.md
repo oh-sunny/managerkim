@@ -152,10 +152,12 @@ npm run dev
 - [PLAN 구현 계획](docs/PLAN.md): 단계별 작업·완료 기준·진행 상태와 다음 작업. 구현을 시작할 때 먼저 확인합니다.
 - [SPEC 현재 구현 명세](spec/spec_001.md): 실제 동작·한계와 기능별 구현 차이
 - [SPEC 002 기획서 입력·안내 준비](spec/spec_002.md): 문서에서 운영 정보 후보 추출, 필수 대상 빠른 선택, 안내 자료·초안 저장의 추가 요구사항
+- [SPEC 003 등록·공지 화면 흐름](spec/spec_003.md): 현재 통합 작업의 목표와 인수 조건
 - [공개 업무 조사](docs/research_001.md): 공개 사례·출처와 조사 당시의 제품 제안
 - [데이터 흐름과 저장 구조](docs/data-architecture.md): 파일·텍스트 입력, 분석 후보, 확정 정보, 공지 초안과 신청/안내 이력을 Supabase·API에 연결하는 설계 초안
 - [공지 초안 톤 가이드](docs/references/tone-guide.md): 말투 작성 기준과 [공개 레퍼런스](docs/references/daangn-tone-references.csv). 현재 앱에서 읽는 데이터가 아닌 작성 참고 자료입니다.
 - [테스트 구성과 평가 방법](tests/README.md): 자동 테스트, 가상 사례 자료, 문서 생성·공지 평가 도구
+- [발표 자료](docs/presentation/발표용_프로젝트_현황.md): 작성 당시 상태 요약과 데이터 흐름 도식. 최신 구현 상태는 PLAN과 SPEC 001을 따릅니다.
 
 ## 저장소 구성
 
@@ -175,6 +177,7 @@ npm run dev
 ├─ prototype/                       # 현재 실행·배포하는 프런트엔드
 │  ├─ index.html                    # 화면 진입점; app.js와 styles.css 로드
 │  ├─ app.js                        # 화면·예시 데이터·상태 저장·API 호출 연결
+│  ├─ draft-storage-id.js           # 화면 티켓 ID를 서버 초안 저장 ID로 변환
 │  ├─ styles.css                    # 화면 스타일
 │  ├─ data.js                       # 신청 인원·대상 계산과 티켓 정렬
 │  ├─ document-extract.js           # TXT·MD 텍스트에서 운영 정보 후보 추출
@@ -195,8 +198,8 @@ npm run dev
 │  ├─ google-sheets-service.mjs     # 서버용 읽기 전용 서비스 계정 인증
 │  └─ gemini-smoke.mjs               # npm run test:gemini; 가상 자료로 외부 API 연결 확인
 ├─ supabase/
-│  └─ migrations/                  # DB 테이블·접근 정책·저장소 변경 이력
-│     └─ 20261006015431_notice_drafts_and_resources.sql
+│  ├─ migrations/                  # DB 테이블·접근 정책·저장소 변경 이력
+│  └─ functions/                   # 화면 밖 Sheets 동기화 Edge Function
 │
 ├─ tests/                           # 자동 테스트·입력 자료·평가 도구를 한곳에 보관
 │  ├─ README.md                     # 테스트 구조·자료 재생성 방법·평가 기준
@@ -222,14 +225,21 @@ npm run dev
 │  ├─ PRD.md                        # 제품 목표와 요구사항
 │  ├─ PLAN.md                       # 구현 순서와 진행 상태
 │  ├─ data-architecture.md          # 데이터 흐름과 서버 저장 설계 초안
+│  ├─ REVIEW_SCREEN_REVISION.md     # 검토 화면 변경 이유와 논의 기록
 │  ├─ research_001.md               # 공개 사례 조사
+│  ├─ presentation/                 # 발표용 현황 문서와 SVG·PNG 도식
 │  └─ references/                  # 공지 작성 참고 자료; 앱 실행 시 읽지 않음
 │     ├─ tone-guide.md              # 말투 기준
 │     └─ daangn-tone-references.csv  # 공개 문구와 출처
 ├─ spec/                            # 기능별 상세 명세
 │  ├─ spec_001.md                   # 현재 구현 동작과 한계
-│  └─ spec_002.md                   # 기획서 입력·대상 선택·자료·초안 추가 요구사항
+│  ├─ spec_002.md                   # 기획서 입력·대상 선택·자료·초안 추가 요구사항
+│  └─ spec_003.md                   # 등록·공지 화면 흐름과 인수 조건
 │
+├─ outputs/                         # 예시 Sheets 파일·생성 도구·미리보기; 운영 데이터 아님
+├─ 작업일지.md                       # 작업·검증 기록
+├─ AGENTS.md                        # 프로젝트 협업 규칙
+├─ .local-preview/                  # 로컬 조사 임시 파일; Git 제외
 ├─ node_modules/                    # npm 설치 결과; Git 제외, 재설치 가능
 └─ .git/                            # Git 이력과 저장소 정보
 ```
@@ -248,7 +258,7 @@ npm run dev
 
 `pdfjs-dist`와 `yauzl`은 현재 `scripts/document-reader.mjs`에서 사용하므로 미사용 패키지로 분류하지 않습니다. 의존성 정리는 현재 코드의 참조를 기준으로 판단합니다.
 
-`tests/`, `supabase/migrations/`, `.env`, `.git/`는 테스트와 입력 자료, DB 재구성 이력, 로컬 연결 설정, 버전 이력을 각각 보관합니다.
+`tests/`, `supabase/migrations/`, `.env`, `.git/`는 테스트와 입력 자료, DB 재구성 이력, 로컬 연결 설정, 버전 이력을 각각 보관합니다. `outputs/`의 예시 Sheets·미리보기는 발표와 재현에 사용하므로 유지하고, 다시 만들 수 있는 `.inspect.ndjson` 검사 출력만 Git에서 제외합니다. `docs/presentation/`의 SVG는 수정 가능한 원본, PNG는 공유용 이미지입니다.
 
 추가로 구조를 정리한다면 `scripts/`의 서버 모듈을 `server/`로 분리하고, `spec/`을 `docs/spec/`으로 합칠 수 있습니다. 실제 이동 시 import·문서 링크와 로컬·Vercel 실행 경로를 함께 수정해야 합니다.
 # Supabase 시간별 시트 동기화
