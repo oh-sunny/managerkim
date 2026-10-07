@@ -45,6 +45,7 @@ const assets = new Map([
   ['/document-import.js', ['document-import.js', 'text/javascript; charset=utf-8']],
   ['/message-templates.js', ['message-templates.js', 'text/javascript; charset=utf-8']],
   ['/notice-draft.js', ['notice-draft.js', 'text/javascript; charset=utf-8']],
+  ['/send-preflight.js', ['send-preflight.js', 'text/javascript; charset=utf-8']],
 ]);
 const requestedPort = process.env.PORT ?? '3000';
 if (!/^\d+$/.test(requestedPort) || Number(requestedPort) < 1 || Number(requestedPort) > 65535) {

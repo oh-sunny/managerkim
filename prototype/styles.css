@@ -49,6 +49,11 @@ dialog{border:1px solid #e5eae3;border-radius:14px;box-shadow:0 24px 90px #192f2
 .notice-card-field-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;font-weight:650}
 .notice-card-field textarea{width:100%;min-height:55px;resize:vertical}
 .notice-card-field small{display:block;color:#687971;margin-top:6px}
+.brief-status{display:flex;align-items:center;gap:8px;margin-top:8px}
+.brief-status .button{min-height:30px;padding:4px 9px;font-size:12px}
+.brief-evidence{margin-top:8px;font-size:12px;color:#52675a}
+.brief-evidence summary{cursor:pointer}
+.brief-evidence blockquote{margin:8px 0 0;padding:8px 10px;border-left:2px solid #cbd9ce;background:#fff;white-space:pre-wrap;overflow-wrap:anywhere}
 .brief-include{display:flex;align-items:center;gap:5px;font-size:.78rem;font-weight:400;white-space:nowrap}
 .brief-include input{accent-color:#c85014}
 @media(max-width:800px){.notice-card-grid{grid-template-columns:1fr}.notice-card-heading{flex-direction:column}}

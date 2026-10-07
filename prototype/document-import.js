@@ -129,10 +129,11 @@ export function mountDocumentImport(root, { getValue, apply, loggedIn, login, sa
         const option=row.options[Number(choice.value)], input=root.querySelector(`#analysis-edit-${row.field}-${choice.value}`);
         const value=applicableValue(row.field,input.value);
         if (value===null) { error(`${row.label}: 적용할 값의 형식 또는 누락된 정보를 확인해주세요.`);input.focus();return; }
-        selected.push({ field:row.field,appliedValue:value,originalValue:option.value,manuallyEdited:value!==option.applyValue,evidence:option.evidence,analysisId:result.id,analyzedAt:result.analyzedAt,appliedAt:new Date().toISOString(),model:result.model });
+        selected.push({ field:row.field,status:row.status,appliedValue:value,originalValue:option.value,manuallyEdited:value!==option.applyValue,evidence:option.evidence,analysisId:result.id,analyzedAt:result.analyzedAt,appliedAt:new Date().toISOString(),model:result.model });
       }
-      if (!selected.length) { error('적용할 후보를 먼저 선택해주세요.');return; }
-      apply(selected); error(''); $('#document-status').textContent=`${selected.length}개 항목을 채웠습니다. 아래 운영 정보를 확인하고 프로젝트를 저장하세요.`;
+      const issues=result.fields.filter(row=>['conflict','review'].includes(row.status)&&!selected.some(item=>item.field===row.field)).map(row=>({field:row.field,status:row.status,analysisId:result.id,analyzedAt:result.analyzedAt}));
+      if (!selected.length&&!issues.length) { error('적용할 후보를 먼저 선택해주세요.');return; }
+      apply(selected,issues); error(''); $('#document-status').textContent=`${selected.length}개 항목을 채우고 확인할 정보 ${issues.length}개를 남겼습니다. 아래 운영 정보를 확인하고 프로젝트를 저장하세요.`;
     }
   });
   return () => { disposed=true;version++;clearInterval(progressTimer);controller?.abort(); };

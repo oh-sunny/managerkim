@@ -1,4 +1,4 @@
-export const DEFAULT_GEMINI_MODEL = 'gemini-3.8-flash';
+export const DEFAULT_GEMINI_MODEL = 'gemini-3.7-flash';
 
 export function isGeminiModel(model) {
   return typeof model === 'string' && /^gemini-[a-z0-9.-]+$/.test(model);

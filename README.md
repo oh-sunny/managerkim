@@ -8,15 +8,16 @@ HTML·CSS·JavaScript와 Node.js 정적 서버로 실행합니다. 현재 가능
 
 - 프로젝트 등록·수정, 이름·팀 검색을 통한 대상·필수 동료 선택
 - 신청·취소·확정 상태 변경과 현황·DM 대상 재계산
+- Google Sheets 직원명부·프로젝트·대상·신청이력 네 탭의 읽기 전용 수동 동기화
 - 프로젝트·신청 이력·티켓·보낸 안내의 Supabase 저장과 변경 버전 기록
 - 공식 공휴일을 반영한 규칙 티켓 생성·갱신, 보류·안내하지 않기와 사유 기록
 - 수정 가능한 공지 정보 카드, 카드 기반 Gemini 초안 생성·사실 검증, 현재 본문과 새 초안 비교, 팀별 DM 대상 또는 채널 선택, 모의 발송
 - 안내 초안·대상 선택의 Supabase 저장·복원. 발송 확인 체크는 복원하지 않음
 - 여러 PDF·DOCX·TXT·MD와 붙여넣은 내용을 Gemini로 함께 분석하고 핵심 정보·출처·누락·충돌을 검토 후 적용
 - 원문을 길게 복사하는 대신 공지 목적·대상·신청 절차를 짧게 편집하고, 근거와 수정 입력은 필요할 때 펼쳐 확인
-- 스캔 PDF 자동 OCR과 PDF 전체 이미지 읽기, 적용한 정보의 근거·시각을 프로젝트와 함께 로컬 저장
+- 스캔 PDF 자동 OCR과 PDF 전체 이미지 읽기, 적용한 정보의 근거·시각을 프로젝트와 함께 계정별 Supabase 상태에 저장
 
-동료 명단과 기존 티켓 일부는 예시 데이터입니다. 새 프로젝트는 공개 공휴일 달력을 조회한 뒤 규칙으로 티켓을 만듭니다. Google Sheets 예시 파일과 화면의 수동 동기화 경로를 준비했으며 서버용 서비스 계정 자격 증명 설정이 남았습니다. Slack 전송과 서버의 주기 실행도 아직 연결되지 않았습니다. 메시지는 실제로 보내지 않습니다.
+초기 동료 명단과 기존 티켓 일부는 예시 데이터입니다. 새 프로젝트는 공개 공휴일 달력을 조회한 뒤 규칙으로 티켓을 만듭니다. Google Sheets 서비스 계정으로 예시 시트의 네 탭을 실제 조회·정규화했으며, 로그인한 운영자가 화면에서 수동으로 가져오는 경로를 구현했습니다. 화면 버튼부터 Supabase 저장·복원까지의 전체 흐름은 별도 검증이 필요합니다. Slack 전송과 서버의 주기 실행은 아직 연결되지 않았으며 메시지는 실제로 보내지 않습니다.
 
 ## 로컬 실행
 
@@ -48,7 +49,7 @@ npm run dev
 
 직원명부는 회사의 전체 사원 명부이며 `대상` 탭은 프로젝트마다 그중 누구를 신청 대상으로 삼는지 나타냅니다. `employeeId`는 네 탭을 잇는 고정 ID이고 `사번`은 사람이 확인하기 쉬운 값입니다. 이력의 `occurredAt`은 `2026-10-03 16:00:00 KST` 형식을 사용합니다. 이전 사건 행을 수정·삭제하지 않고 새 사건을 마지막 행에 추가해야 재신청 순서까지 보존됩니다.
 
-웹앱 서버가 비공개 시트를 읽으려면 Google Cloud에서 **Sheets API를 활성화하고 서비스 계정을 만든 뒤**, 시트를 그 서비스 계정 이메일에 **뷰어**로 공유합니다. [Google 서비스 계정 안내](https://developers.google.com/identity/protocols/oauth2/service-account)처럼 서버가 읽기 전용 접근 토큰을 발급받습니다. `.env` 또는 Vercel 환경 변수에 `GOOGLE_SHEETS_SPREADSHEET_ID`, `GOOGLE_SHEETS_CLIENT_EMAIL`, `GOOGLE_SHEETS_PRIVATE_KEY`를 설정합니다. 개인 키의 줄바꿈은 한 줄의 `\n`으로 입력하고 키 파일은 Git에 넣지 않습니다. 홈 화면의 **시트에서 가져오기**는 로그인한 운영자가 누를 때 네 탭을 함께 읽고 직원명부·대상·신청 이력을 갱신합니다. 실패하면 기존 현황을 유지하고 오류를 표시합니다. 서비스 계정 설정 전에는 시트와 화면의 자동 연결이 시작되지 않습니다.
+웹앱 서버가 비공개 시트를 읽으려면 Google Cloud에서 **Sheets API를 활성화하고 서비스 계정을 만든 뒤**, 시트를 그 서비스 계정 이메일에 **뷰어**로 공유합니다. [Google 서비스 계정 안내](https://developers.google.com/identity/protocols/oauth2/service-account)처럼 서버가 읽기 전용 접근 토큰을 발급받습니다. `.env` 또는 Vercel 환경 변수에 `GOOGLE_SHEETS_SPREADSHEET_ID`, `GOOGLE_SHEETS_CLIENT_EMAIL`, `GOOGLE_SHEETS_PRIVATE_KEY`를 설정합니다. 개인 키의 줄바꿈은 한 줄의 `\n`으로 입력하고 키 파일은 Git에 넣지 않습니다. 현재 로컬 설정으로 네 탭의 실제 조회와 정규화가 성공했습니다. 홈 화면의 **시트에서 가져오기**는 로그인한 운영자가 누를 때 네 탭을 함께 읽고 직원명부·대상·신청 이력을 갱신합니다. 시트의 프로젝트 ID는 웹앱에 먼저 등록돼 있어야 합니다. 실패하면 오류를 표시하며, 정기 자동 동기화는 아직 없습니다. 다른 실행 환경에서는 서비스 계정 설정과 시트 공유 권한을 따로 준비해야 합니다.
 
 운영 정보를 바꾸려면 Supabase 운영자 로그인이 필요합니다. 프로젝트·대상 명단·신청/취소 사유·티켓·안내 기록은 계정별 `operator_states`에 저장하고 각 버전을 `operator_state_revisions`에 남깁니다. 브라우저에는 복원용 캐시가 남습니다. 여러 탭의 버전이 다르면 덮어쓰기 전에 충돌을 표시합니다. 발송 확인 체크는 저장하지 않으며, 새로고침 뒤 최종 확인을 다시 해야 합니다.
 
@@ -58,13 +59,13 @@ npm run dev
 2. 현재 연결된 Supabase 프로젝트에는 [`supabase/migrations/20261006015431_notice_drafts_and_resources.sql`](supabase/migrations/20261006015431_notice_drafts_and_resources.sql)과 [`supabase/migrations/20261006090000_operator_state.sql`](supabase/migrations/20261006090000_operator_state.sql)이 적용됐습니다. 다른 Supabase 프로젝트에도 두 마이그레이션을 적용해야 합니다.
 3. Supabase Authentication에 운영자 계정을 준비하고 `npm run dev`로 서버를 다시 시작합니다. 상단 **Supabase 로그인**에서 그 계정으로 로그인합니다.
 
-로그인 후 운영 정보와 안내 초안은 각각 `operator_states`, `notice_drafts`에 자동 저장되며 저장 상태와 버전 충돌을 화면에 표시합니다. 첨부 파일은 비공개 `notice-files` 버킷과 `notice_resources`에 저장됩니다. 모의 발송의 본문·대상·자료 목록도 운영 기록에 저장합니다. 계정별 저장 구조이므로 조직의 여러 운영자 계정 사이에 데이터를 공유하는 권한 모델은 아직 없습니다.
+로그인 후 운영 정보와 안내 초안은 각각 `operator_states`, `notice_drafts`에 자동 저장되며 저장 상태와 버전 충돌을 화면에 표시합니다. 첨부 파일은 비공개 `notice-files` 버킷과 `notice_resources`에 저장됩니다. Sheets에서 가져온 프로젝트는 모의 발송 버튼을 누를 때 서버가 시트를 다시 읽습니다. 승인 당시의 신청 상태·대상 명단과 다르거나 조회에 실패하면 발송을 막고 확인을 다시 요구합니다. 모의 발송의 본문·대상·자료 목록과 마지막 원본 조회 시각도 운영 기록에 저장합니다. 계정별 저장 구조이므로 조직의 여러 운영자 계정 사이에 데이터를 공유하는 권한 모델은 아직 없습니다.
 
 ## Gemini 연결 확인
 
-`npm install` 후 `.env`에 `GEMINI_API_KEY`와 `GEMINI_MODEL=gemini-3.8-flash`를 설정하고 `npm run test:gemini`를 실행합니다. 모델 변수를 생략하면 `gemini-3.8-flash`를 사용합니다. 이 명령은 가상 자료로 연결만 점검하며, 가상 문서 두 개만 Google API에 전달합니다. 기존 `npm test`에는 외부 API 호출이 포함되지 않습니다. 키는 출력하지 않습니다. HTTP 402가 나오면 Google AI Studio에서 해당 프로젝트의 결제·선불 크레딧을 확인합니다.
+`npm install` 후 `.env`에 `GEMINI_API_KEY`와 `GEMINI_MODEL=gemini-3.7-flash`를 설정하고 `npm run test:gemini`를 실행합니다. 모델 변수를 생략하면 `gemini-3.7-flash`를 사용합니다. 이 명령은 가상 자료로 연결만 점검하며, 가상 문서 두 개만 Google API에 전달합니다. 기존 `npm test`에는 외부 API 호출이 포함되지 않습니다. 키는 출력하지 않습니다. HTTP 402가 나오면 Google AI Studio에서 해당 프로젝트의 결제·선불 크레딧을 확인합니다.
 
-웹사이트에서는 **프로젝트 등록·수정 → 자료 분석 → 후보 카드에서 수정·반영 → 프로젝트 저장 → 공지 정보 카드 확인 → Gemini 초안 생성 → 현재 본문과 비교 후 선택** 순서로 사용합니다. 기존 값과 다른 정보나 충돌은 직접 선택해야 합니다. 공지 목적·말투·정보 카드·대상을 바꾸면 새 초안을 생성해 다시 비교합니다. 생성한 본문은 카드의 날짜·링크·수치와 대조하고 별도 Gemini 요청으로 근거 없는 주장도 검사합니다. Supabase 운영자 로그인이 필요하며 키는 서버에서만 사용합니다. 파일 6개, 개별 2MB·전체 2.8MB, PDF 파일당 30쪽, OCR 전체 8쪽, 추출 텍스트 8만 자까지 지원합니다. TXT·MD는 UTF-8입니다.
+웹사이트에서는 **프로젝트 등록·수정 → 자료 분석 → 후보 카드에서 수정·반영 → 프로젝트 저장 → 공지 정보 카드 확인 → Gemini 초안 생성 → 현재 본문과 비교 후 선택** 순서로 사용합니다. 공지 카드에는 적용한 자료의 원문 근거와 확인 상태가 표시됩니다. ‘해야 할 일’은 프로젝트 설명에서 추측하지 않고 신청 절차에서 찾으며, 비용·예외는 별도 카드에서 확인합니다. 충돌하거나 확인이 필요한 항목은 확인 완료하거나 공지에서 제외해야 초안을 생성할 수 있습니다. 공지 목적·말투·정보 카드·대상을 바꾸면 새 초안을 생성해 다시 비교합니다. 생성한 본문은 카드의 날짜·링크·수치와 대조하고 별도 Gemini 요청으로 근거 없는 주장도 검사합니다. Supabase 운영자 로그인이 필요하며 키는 서버에서만 사용합니다. 파일 6개, 개별 2MB·전체 2.8MB, PDF 파일당 30쪽, OCR 전체 8쪽, 추출 텍스트 8만 자까지 지원합니다. TXT·MD는 UTF-8입니다.
 
 텍스트가 적거나 깨진 PDF 페이지는 Gemini 이미지 입력으로 자동 OCR합니다. 이미지 속 정보가 누락될 때는 ‘메모 추가 · 스캔 설정’에서 ‘모든 PDF 페이지를 이미지로 다시 읽기’를 켤 수 있으며, 추가 인식 시간이 걸립니다. OCR 페이지·판독 불가 항목은 원본과 대조해야 합니다. DOCX는 본문·표·머리말·꼬리말·주석이 아닌 각주/미주의 텍스트를 읽으며, 삽입 이미지는 OCR하지 않습니다.
 
@@ -118,7 +119,7 @@ Vercel 함수의 요청·응답 크기 제한에 맞춰 첨부 파일은 4MB 이
 │  ├─ analysis-contract.js          # 자료 분석의 필드·용량 제한·값 검증 규칙
 │  ├─ document-import.js            # 자료 분석 결과를 등록 화면에 연결
 │  ├─ message-templates.js          # 공지 초안 템플릿
-│  └─ rule-engine.js                # 규칙 기반 티켓 평가; 테스트에서 사용, 화면 미연결
+│  └─ rule-engine.js                # 규칙 기반 티켓 평가; 새 프로젝트의 화면 티켓에 연결
 │
 ├─ api/                             # Vercel 서버 함수 진입점
 │  └─ index.js                      # 요청을 scripts/supabase-api.mjs로 전달
@@ -127,7 +128,7 @@ Vercel 함수의 요청·응답 크기 제한에 맞춰 첨부 파일은 4MB 이
 │  ├─ supabase-api.mjs              # 로컬·Vercel 공용 로그인·초안·자료 저장 API
 │  ├─ document-reader.mjs           # PDF·DOCX·텍스트 자료 읽기
 │  ├─ document-analysis.mjs         # 자료 분석 요청과 AI 결과 처리
-│  ├─ application-source.mjs        # 대상 명단·신청 이력 정규화; 화면 미연결
+│  ├─ application-source.mjs        # 대상 명단·신청 이력 정규화; Sheets 가져오기에서 사용
 │  ├─ google-sheets-source.mjs      # Google Sheets 네 탭 읽기·정규화
 │  ├─ google-sheets-service.mjs     # 서버용 읽기 전용 서비스 계정 인증
 │  └─ gemini-smoke.mjs               # npm run test:gemini; 가상 자료로 외부 API 연결 확인
@@ -177,7 +178,7 @@ Vercel 함수의 요청·응답 크기 제한에 맞춰 첨부 파일은 4MB 이
 - **Vercel 실행:** `vercel.json` → `prototype/` 화면 제공. `/api/*`는 `api/index.js`를 거쳐 같은 `scripts/supabase-api.mjs`를 사용합니다. 두 서버 진입점은 실행 환경이 달라 필요합니다.
 - **자동 테스트:** `npm test`로 `tests/` 아래 자동 테스트를 실행합니다. `fixtures.test.js`는 `fixtures/`의 입력·기대 결과와 `tools/notice-contract.mjs`를 사용합니다. `fixtures/documents/`와 `fixtures/source_text/`는 각각 파일 입력과 원문 대조에 필요합니다.
 - **자료 생성·공지 평가:** `python tests/tools/build_fixtures.py`로 자료를 생성하고, `node tests/tools/evaluate-notice.mjs candidate.json`으로 새 공지의 사실 관계를 검사합니다. 환경 요건과 자료 범위는 [테스트 README](tests/README.md)를 참고합니다.
-- **아직 화면에 연결하지 않은 코드:** `rule-engine.js`, `application-source.mjs`, `google-sheets-source.mjs`는 테스트에서 참조합니다. 현재 화면에서 사용하지 않는다는 이유로 삭제하면 테스트와 후속 연동 작업에 영향을 줍니다.
+- **Sheets 가져오기와 규칙 티켓:** 화면은 `rule-engine.js`를 직접 사용합니다. 서버는 `google-sheets-source.mjs`와 `application-source.mjs`로 네 탭을 읽고 신청 이력을 정규화한 뒤 화면에 반환합니다. 세 모듈 모두 자동 테스트에서도 사용합니다.
 
 ### 정리 후보
 
