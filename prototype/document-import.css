@@ -14,6 +14,10 @@
 @media(max-width:900px){.brief-row{grid-template-columns:92px minmax(0,1fr);gap:12px}.document-heading h2,.analysis-summary h3{font-size:20px}}
 @media(max-width:650px){.brief-row{grid-template-columns:1fr;gap:7px;padding:14px 2px}.brief-label{display:flex;align-items:center;gap:8px}.brief-label .tag{display:inline-block;margin:0}.brief-value{font-size:13px}.brief-actions{align-items:stretch;flex-direction:column}.brief-attention{flex-direction:column;gap:4px}.document-upload{padding:14px}.needs-review{padding:14px 10px}}
 .brief-option{border:1px solid #e0e6df;border-radius:10px;padding:12px;background:#fff}
+.brief-option.auto .analysis-edit{margin-left:0}
 .analysis-edit{margin:6px 0 0}
 .analysis-edit>label{margin:4px 0 6px;font-weight:600}
 .analysis-edit details{margin-top:8px}
+.brief-option .button{margin-top:10px}
+.brief-missing summary{cursor:pointer}
+.brief-missing p{margin-top:8px}

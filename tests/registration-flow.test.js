@@ -62,6 +62,15 @@ test('source-free reminder checkpoints retain D-3, D-1 and final rules without i
   assert.deepEqual(blocked.tickets, []);
 });
 
+test('voluntary-only project can preview D-3 and D-1 status checks without a goal', () => {
+  const result = evaluateReminderCheckpoints({project: {...project, requiredIds: [], voluntaryGoalRate: null},
+    calendar, now: '2026-10-07T10:00:00+09:00'});
+  assert.equal(result.status, 'ready');
+  assert.deepEqual(result.tickets.map(ticket => ticket.kind), ['voluntary', 'voluntary']);
+  assert.ok(result.tickets.every(ticket => ticket.title === '자율 신청 현황 확인'));
+  assert.ok(result.tickets.every(ticket => ticket.state === 'scheduled' && ticket.recipientIds.length === 0 && ticket.metrics === null));
+});
+
 test('holiday and weekend checkpoints merge before the deadline while preserving original times', () => {
   const result = evaluateReminderCheckpoints({project,
     calendar: {status: 'success', holidays: ['2026-10-09']},

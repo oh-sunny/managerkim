@@ -49,12 +49,23 @@ test('voluntary goal uses only voluntary targets and exact threshold does not cr
   assert.equal(result.tickets.some(ticket => ticket.kind === 'required' && ticket.state === 'pending'), false);
 });
 
-test('missing goal or empty voluntary group never produces voluntary goal tickets', () => {
+test('missing goal still schedules voluntary status checks without a numeric threshold', () => {
   const noGoal = run({project: {...project, voluntaryGoalRate: null}});
-  assert.equal(noGoal.tickets.some(ticket => ticket.kind === 'voluntary'), false);
+  const checks = noGoal.tickets.filter(ticket => ticket.kind === 'voluntary');
+  assert.equal(checks.length, 2);
+  assert.ok(checks.some(ticket => ticket.state === 'pending'));
+  assert.ok(checks.every(ticket => ticket.title === '자율 신청 현황 확인'));
+  assert.equal(checks[0].metrics.threshold, null);
+  assert.match(checks[0].reason, /목표 없이 신청 현황 확인/);
   const noVoluntary = run({project: {...project, requiredIds: project.targetIds}});
   assert.equal(noVoluntary.summary.voluntaryRate, null);
   assert.equal(noVoluntary.tickets.some(ticket => ticket.kind === 'voluntary'), false);
+});
+
+test('reminder evaluation never retires a first notice ticket', () => {
+  const initial = {key: 'health:initial:2026-10-09T00:00:00.000Z',kind: 'initial',state: 'pending'};
+  const result = run({existingTickets: [initial]});
+  assert.deepEqual(result.retiredKeys, []);
 });
 
 test('D-1 applies the 90% voluntary threshold and final mandatory check occurs four hours before deadline', () => {
