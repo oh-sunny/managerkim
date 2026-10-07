@@ -1,10 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mergeSheetApplications} from '../prototype/sheet-application-merge.js';
+import {mergeSheetApplications,operatorEventsForCurrentTargets} from '../prototype/sheet-application-merge.js';
 
 const sheetApplication={projectId:'workshop',employeeId:2,status:'applied',checkedAt:'2026-09-29T02:00:00.000Z',sourceEventId:'W-002'};
 const sheetEvent={projectId:'workshop',employeeId:2,status:'applied',occurredAt:'2026-09-29T02:00:00.000Z'};
 const operatorEvent={id:'operator-1',projectId:'workshop',employeeId:2,fromStatus:'applied',toStatus:'confirmed',source:'operator',at:'2026-10-07T10:00'};
+
+test('past operator actions outside the current Sheet target list remain history, not applications',()=>{
+  const past={...operatorEvent,id:'operator-past',employeeId:99};
+  const current=operatorEventsForCurrentTargets([past,operatorEvent],[{projectId:'workshop',targetIds:[2]}]);
+  assert.deepEqual(current,[operatorEvent]);
+  assert.deepEqual(mergeSheetApplications([sheetApplication],[sheetEvent],current),[
+    {projectId:'workshop',employeeId:2,status:'confirmed',checkedAt:operatorEvent.at,sourceEventId:'operator-1'},
+  ]);
+});
 
 test('a later operator confirmation survives another read-only Sheet import',()=>{
   assert.deepEqual(mergeSheetApplications([sheetApplication],[sheetEvent],[operatorEvent]),[

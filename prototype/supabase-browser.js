@@ -142,6 +142,11 @@ export async function readSheetSnapshot() {
   return rows[0] || null;
 }
 
+export async function readLatestSheetSyncRun() {
+  const rows = await supabaseRequest('/rest/v1/sheet_sync_runs?select=status,error_code,source_checked_at,blocked_count,evaluated_count&order=finished_at.desc,id.desc&limit=1');
+  return rows[0] || null;
+}
+
 export async function readAutomationTickets() {
   return supabaseRequest('/rest/v1/automation_tickets?select=payload,state&limit=1000');
 }

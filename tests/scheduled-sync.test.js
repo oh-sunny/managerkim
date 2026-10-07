@@ -43,6 +43,23 @@ test('scheduled sync ignores an old local correction outside the current Sheet r
   assert.deepEqual(result.tickets.find(ticket=>ticket.kind==='required'&&ticket.state==='pending').recipientIds,[1]);
 });
 
+test('legacy registration time only postpones the first notice, while Sheet reminders still evaluate', () => {
+  const source={employees:[{id:1},{id:2}],sourceProjects:[{id:'health',name:'건강검진'}],
+    ...normalizeApplicationSource({knownProjectIds:['health'],knownEmployeeIds:[1,2],
+      targetRows:[{projectId:'health',employeeId:1,required:true},{projectId:'health',employeeId:2,required:false}],
+      eventRows:[],lastSuccessAt:'2026-10-06T10:55:00+09:00'})};
+  const operatorState={payload:{projects:[{id:'health',name:'건강검진',start:'2026-10-01',
+    deadlineAt:'2026-10-09T18:00',voluntaryGoalRate:0.8}],tickets:[],applicationEvents:[],records:[]}};
+  const result=buildScheduledSync({source,operatorState,calendar:{status:'success',holidays:[]},
+    now:'2026-10-06T11:00:00+09:00'});
+  assert.equal(result.sourceStatus,'success');
+  assert.equal(result.firstNoticeSkippedCount,1);
+  assert.equal(result.blockedCount,1);
+  assert.deepEqual(result.issues,[]);
+  assert.equal(result.tickets.some(ticket=>ticket.kind==='initial'),false);
+  assert.equal(result.tickets.some(ticket=>ticket.kind==='required'),true);
+});
+
 const timeOnlyEvaluators = {
   evaluateFirstNoticeTicket({project, existingTickets}) {
     const dueAt = project.firstNoticeReviewAt || project.createdAt;

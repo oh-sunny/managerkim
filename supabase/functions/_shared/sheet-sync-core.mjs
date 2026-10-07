@@ -45,6 +45,7 @@ export function buildScheduledSync({source = null, sourceError = null, operatorS
   const issues = [];
   let evaluatedCount = 0;
   let blockedCount = 0;
+  let firstNoticeSkippedCount = 0;
   let applications = [];
 
   if (sourceReady) {
@@ -87,9 +88,9 @@ export function buildScheduledSync({source = null, sourceError = null, operatorS
         issues.push({projectId: project.id, code: 'first-notice-invalid'});
       }
     } else {
-      // A legacy project has no stable registration time. Do not invent a key.
+      // Legacy projects have no stable first-notice key. Skip only that decision.
       blockedCount++;
-      issues.push({projectId: project.id, code: 'registration-time-missing'});
+      firstNoticeSkippedCount++;
     }
 
     const reminderExisting = existing.filter(ticket => ticket.kind !== 'initial');
@@ -149,5 +150,5 @@ export function buildScheduledSync({source = null, sourceError = null, operatorS
   return {ownerId, tickets, retiredKeys: [...retiredKeys], applications,
     sourceStatus: sourceReady ? 'success' : sourceError ? 'error' : 'not-connected',
     sourceCheckedAt: sourceReady ? source.sync.lastSuccessAt : null,
-    evaluatedCount, blockedCount, issues};
+    evaluatedCount, blockedCount, firstNoticeSkippedCount, issues};
 }

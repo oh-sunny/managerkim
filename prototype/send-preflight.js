@@ -1,4 +1,4 @@
-import {mergeSheetApplications} from './sheet-application-merge.js';
+import {mergeSheetApplications,operatorEventsForCurrentTargets} from './sheet-application-merge.js';
 
 // Snapshot only the source facts that determine who receives an announcement.
 export function projectSendSnapshot(project,employees,applications) {
@@ -36,7 +36,8 @@ export function sheetSendSnapshot(source,projectId,teamByName,operatorEvents=[])
     if(!team)throw new Error('Google Sheets에 웹앱에 없는 팀이 있습니다.');
     return {...row,team};
   });
-  if(operatorEvents.length&&!Array.isArray(source.events))throw new Error('Google Sheets의 신청 이력을 확인하지 못했습니다.');
-  const applications=operatorEvents.length?mergeSheetApplications(source.applications,source.events,operatorEvents):source.applications;
+  const currentOperatorEvents=operatorEventsForCurrentTargets(operatorEvents,targets);
+  if(currentOperatorEvents.length&&!Array.isArray(source.events))throw new Error('Google Sheets의 신청 이력을 확인하지 못했습니다.');
+  const applications=currentOperatorEvents.length?mergeSheetApplications(source.applications,source.events,currentOperatorEvents):source.applications;
   return projectSendSnapshot({id:projectId,...targets[0]},employees,applications);
 }

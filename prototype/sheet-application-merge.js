@@ -7,6 +7,12 @@ function eventTime(value) {
   return Number.isNaN(time)?-Infinity:time;
 }
 
+// Keep historical operator actions, but only current targets may affect a Sheet snapshot.
+export function operatorEventsForCurrentTargets(operatorEvents, projectTargets) {
+  const targets = new Map(projectTargets.map(row => [row.projectId, new Set(row.targetIds)]));
+  return operatorEvents.filter(event => targets.get(event.projectId)?.has(event.employeeId));
+}
+
 export function mergeSheetApplications(sourceApplications, sourceEvents, operatorEvents) {
   const latestSheet=new Map();
   for(const event of sourceEvents){

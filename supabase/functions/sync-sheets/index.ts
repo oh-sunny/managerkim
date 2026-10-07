@@ -118,7 +118,8 @@ async function evaluateOwner(base: string, key: string, state: OperatorState, ca
   return {ownerId, status: errorCode ? 'error' : 'success', sourceStatus: result.sourceStatus,
     lastSuccessAt: result.sourceCheckedAt, employees: source?.employees.length ?? null,
     events: source?.events.length ?? null, evaluatedProjects: result.evaluatedCount,
-    blockedDecisions: result.blockedCount, errorCode, ...saved};
+    blockedDecisions: result.blockedCount, firstNoticeSkippedCount: result.firstNoticeSkippedCount,
+    errorCode, ...saved};
 }
 
 async function run(ownerId: string | null) {
