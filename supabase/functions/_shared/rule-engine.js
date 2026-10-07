@@ -209,9 +209,10 @@ export function evaluateReminderCheckpoints({project, calendar, now, existingTic
   const {deadline, checkpoints: schedule, needsReview} = checkpoints(project, rules, calendar);
   const byKey = new Map(previous.map(ticket => [ticket.key, ticket]));
   const tickets = [];
+  const voluntaryCount = (project.targetIds || []).filter(id => !(project.requiredIds || []).includes(id)).length;
   for (const point of schedule) {
     if (Date.parse(point.dueAt) >= deadline.getTime() || nowAt >= deadline) continue;
-    if (point.kind === 'voluntary' && project.voluntaryGoalRate == null) continue;
+    if (point.kind === 'voluntary' && voluntaryCount === 0) continue;
     if (point.kind === 'required' && Array.isArray(project.requiredIds) && project.requiredIds.length === 0) continue;
     const prior = byKey.get(point.key);
     if (['done', 'dismissed'].includes(prior?.state)) continue;
@@ -219,7 +220,8 @@ export function evaluateReminderCheckpoints({project, calendar, now, existingTic
     const state = prior?.state === 'deferred' && prior.reviewAt && Date.parse(prior.reviewAt) > nowAt.getTime()
       ? 'deferred' : due ? 'pending' : 'scheduled';
     tickets.push({...point, state,
-      title: point.kind === 'required' ? '필수 대상 신청 현황 확인' : '자율 신청 목표 확인',
+      title: point.kind === 'required' ? '필수 대상 신청 현황 확인'
+        : project.voluntaryGoalRate == null ? '자율 신청 현황 확인' : '자율 신청 목표 확인',
       reason: '신청 현황 확인 필요', recipientIds: [], sourceCheckedAt: null, metrics: null});
   }
   const keys = new Set(tickets.map(ticket => ticket.key));
@@ -270,37 +272,42 @@ export function evaluateReminderTickets({project, applicationRecords, employees,
   const voluntaryRate = counts.voluntary.target ? counts.voluntary.applied / counts.voluntary.target : null;
   const goal = project.voluntaryGoalRate;
   if (goal != null && (!Number.isFinite(goal) || goal < 0 || goal > 1)) throw new TypeError('자율 신청 목표는 0~1 사이여야 합니다.');
-  const previous = new Map(existingTickets.filter(ticket => ticket.key).map(ticket => [ticket.key, ticket]));
+  const isReminder = ticket => ticket.key?.startsWith(`${project.id}:required:`)
+    || ticket.key?.startsWith(`${project.id}:voluntary:`);
+  const previous = new Map(existingTickets.filter(isReminder).map(ticket => [ticket.key, ticket]));
   const recent = sentRecords.filter(record => record.project === project.id).sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 3);
   const tickets = [];
   const activeKeys = new Set();
   for (const point of schedule) {
     if (Date.parse(point.dueAt) >= deadline.getTime() || nowAt >= deadline) continue;
     if (point.kind === 'required' && counts.required.target === 0) continue;
+    if (point.kind === 'voluntary' && counts.voluntary.target === 0) continue;
     const due = Date.parse(point.dueAt) <= nowAt.getTime();
     const recipientIds = point.kind === 'required' ? status.requiredPendingIds : voluntaryPendingIds;
     const threshold = point.kind === 'voluntary' && goal != null && voluntaryRate != null
       ? goal * point.goalFraction : null;
     const condition = point.kind === 'required' ? recipientIds.length > 0
-      : threshold != null && voluntaryRate < threshold;
+      : threshold == null ? recipientIds.length > 0 : voluntaryRate < threshold;
     // Future checkpoints remain visible even when today's count already meets the goal.
     // At the due time, only an unmet condition can become a pending proposal.
     if (due && !condition) continue;
-    if (point.kind === 'voluntary' && threshold == null) continue;
     const prior = previous.get(point.key);
     if (['done', 'dismissed'].includes(prior?.state)) continue;
     const state = prior?.state === 'deferred' && prior.reviewAt && Date.parse(prior.reviewAt) > nowAt.getTime() ? 'deferred'
       : !due ? 'scheduled' : 'pending';
-    const title = point.kind === 'required' ? '필수 대상 신청 현황 확인' : '자율 신청 목표 확인';
+    const title = point.kind === 'required' ? '필수 대상 신청 현황 확인'
+      : goal == null ? '자율 신청 현황 확인' : '자율 신청 목표 확인';
     const reason = point.kind === 'required'
       ? `필수 대상 ${counts.required.target}명 중 신청 전 ${counts.required.pending}명`
-      : `자율 대상 ${counts.voluntary.target}명 중 신청 ${counts.voluntary.applied}명 · 현재 ${(voluntaryRate * 100).toFixed(1)}% / 점검 기준 ${(threshold * 100).toFixed(1)}%`;
+      : threshold == null
+        ? `자율 대상 ${counts.voluntary.target}명 중 신청 ${counts.voluntary.applied}명 · 목표 없이 신청 현황 확인`
+        : `자율 대상 ${counts.voluntary.target}명 중 신청 ${counts.voluntary.applied}명 · 현재 ${(voluntaryRate * 100).toFixed(1)}% / 점검 기준 ${(threshold * 100).toFixed(1)}%`;
     tickets.push({...point, state, title, reason, recipientIds, sourceCheckedAt: sync.lastSuccessAt,
       metrics: {required: counts.required, voluntary: counts.voluntary, total: counts.total,
         voluntaryRate, voluntaryGoalRate: goal ?? null, threshold}, recentNotices: recent});
     activeKeys.add(point.key);
   }
-  const retiredKeys = existingTickets.filter(ticket => ticket.key && ['pending', 'scheduled', 'deferred'].includes(ticket.state) && !activeKeys.has(ticket.key)).map(ticket => ticket.key);
+  const retiredKeys = existingTickets.filter(ticket => isReminder(ticket) && ['pending', 'scheduled', 'deferred'].includes(ticket.state) && !activeKeys.has(ticket.key)).map(ticket => ticket.key);
   return {status: 'ready', blockedReasons: [], sourceError: null, tickets, needsReview, retiredKeys,
     summary: {counts, voluntaryRate, voluntaryGoalRate: goal ?? null, sourceCheckedAt: sync.lastSuccessAt}};
 }

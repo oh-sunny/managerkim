@@ -153,9 +153,10 @@ test('document analysis is authenticated, same-origin, size-limited and passes n
   assert.equal((await call(handler,'/api/documents/analyze',{method:'POST',body})).status,401);
   assert.equal((await call(handler,'/api/documents/analyze',{method:'POST',body,headers:{...headers,origin:'https://other.example'}})).status,403);
   assert.equal((await call(handler,'/api/documents/analyze',{method:'POST',body,headers})).status,200);
-  assert.equal(analyzed,1);
+  assert.equal((await call(handler,'/api/documents/analyze',{method:'POST',body,headers:{authorization:'Bearer test-access','content-type':'application/json',origin:'http://localhost:3100'}})).status,200);
+  assert.equal(analyzed,2);
   assert.equal((await call(handler,'/api/documents/analyze',{method:'POST',body:'a'.repeat(4_100_001),headers})).status,413);
-  assert.equal(analyzed,1);
+  assert.equal(analyzed,2);
 });
 
 test('concurrent analysis from the same user is rejected and provider failure is safe',async()=>{

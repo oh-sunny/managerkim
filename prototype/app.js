@@ -1,8 +1,8 @@
 /* Slack sends are simulated. Document analysis and draft storage use authenticated server APIs. */
 import {calculateStatus, setApplication, applicationBreakdown, sortTicketsForDisplay} from './data.js';
 import {mountDocumentImport} from './document-import.js';
-import {evaluateFirstNoticeTicket,evaluateReminderTickets} from './rule-engine.js';
 import {buildRegistrationSummary} from './registration-summary.js';
+import {evaluateFirstNoticeTicket,evaluateReminderCheckpoints,evaluateReminderTickets} from './rule-engine.js';
 import {NOTICE_PURPOSES,BRIEF_LABELS,makeNoticeBrief,prepareNoticeDraft,restoreNoticeDraft,compareDraftProject,acceptProjectReview,generationSignature,acceptNoticeCandidate} from './notice-draft.js';
 import {makeNoticeResource,latestProjectResources,snapshotSimulatedNotice} from './notice-resources.js';
 import {prepareNoticeGeneration,NOTICE_TONE_LABELS} from './notice-generation-input.js';
@@ -96,6 +96,7 @@ let historyContext = null;
 let cancelContext = null;
 let previewContext = null;
 let ticketDialogContext = null;
+let registrationSummaryOrigin = null;
 let toastTimeout;
 let projectFormError = '';
 let projectFormBaseline = '';
@@ -331,6 +332,10 @@ async function refreshOperatorState(){
   }catch{operatorSaveStatus='error';renderCloudButton();}
 }
 function checkedAtIso(value){return /(?:Z|[+-]\d{2}:\d{2})$/i.test(value||'')?value:`${value}:00+09:00`;}
+function calendarCoversProject(project){
+  const year=Number(project.deadlineAt?.slice(0,4));
+  return Boolean(officialCalendar&&Number.isInteger(year)&&[year-1,year].every(item=>officialCalendar.years?.includes(item)));
+}
 function reconcileProjectTickets(project){
   if(project.lifecycle&&project.lifecycle!=='active'){
     let changed=false;
@@ -349,12 +354,16 @@ function reconcileProjectTickets(project){
     }
     for(const key of first.retiredKeys){const ticket=priorFirst.find(item=>item.key===key);if(ticket&&ticket.state!=='retired'){ticket.state='retired';ticket.lifecycleReason='첫 안내 검토 시각 변경';firstChanged=true;}}
   }
-  if(!officialCalendar||!project.lastCheckedAt||['sample','sheet'].includes(project.dataKind))return firstChanged;
-  const prior=TICKETS.filter(t=>t.project===project.id&&t.key);
-  const output=evaluateReminderTickets({project,applicationRecords:applications,employees:EMPLOYEES,
+  if(!calendarCoversProject(project)||!project.lastCheckedAt||['sample','sheet'].includes(project.dataKind))return firstChanged;
+  const prior=TICKETS.filter(t=>t.project===project.id&&['required','voluntary'].includes(t.kind));
+  let output=evaluateReminderTickets({project,applicationRecords:applications,employees:EMPLOYEES,
     sync:{status:'success',lastSuccessAt:checkedAtIso(project.lastCheckedAt)},calendar:officialCalendar,
     now:new Date().toISOString(),policy:{maxDataAgeMinutes:1440},existingTickets:prior,sentRecords:records});
-  if(output.status!=='ready'){holidayError=`${project.name}: 신청 현황을 새로 확인해야 티켓을 갱신할 수 있어요 (${output.blockedReasons.join(', ')}).`;return firstChanged;}
+  if(output.status!=='ready'){
+    holidayError=`${project.name}: 신청 현황을 새로 확인해야 대상과 신청률을 판단할 수 있어요 (${output.blockedReasons.join(', ')}).`;
+    output=evaluateReminderCheckpoints({project,calendar:officialCalendar,now:new Date().toISOString(),existingTickets:prior});
+  }
+  if(output.status!=='ready')return firstChanged;
   const byKey=new Map(prior.map(t=>[t.key,t]));let changed=firstChanged;
   for(const candidate of output.tickets){
     const old=byKey.get(candidate.key),id=old?.id||`${project.id}-${candidate.kind}-${candidate.dueAt.replace(/\D/g,'')}`;
@@ -373,7 +382,7 @@ async function refreshOfficialCalendarAndTickets(){
   try{
     const batches=[];for(let index=0;index<years.length;index+=4)batches.push(years.slice(index,index+4));
     const calendars=[];for(const batch of batches)calendars.push(await cloudRequest('/api/holidays',{method:'POST',body:{years:batch}}));
-    officialCalendar={status:'success',holidays:[...new Set(calendars.flatMap(item=>item.holidays))].sort(),checkedAt:calendars.at(-1).checkedAt,source:calendars.at(-1).source};
+    officialCalendar={status:'success',years,holidays:[...new Set(calendars.flatMap(item=>item.holidays))].sort(),checkedAt:calendars.at(-1).checkedAt,source:calendars.at(-1).source};
     holidayError='';let changed=false;
     for(const project of PROJECTS.filter(p=>p.dataKind!=='sample'))changed=reconcileProjectTickets(project)||changed;
     if(changed){persist();if(route().view!=='edit-project')render();}
@@ -755,7 +764,7 @@ function reminderPolicyFields(p){
 }
 function projectFormPage(id) {
   const p=id==='new'?null:getProject(id),field=(name,label,value,type='text',required=true)=>`<div class="field"><label for="project-${name}">${label}</label><input id="project-${name}" name="${name}" type="${type}" value="${escapeHtml(value??'')}" ${required?'required':''}></div>`;
-  return `<a href="${p?`#project/${p.id}`:'#projects'}" class="back-link">${icon('back')} 프로젝트로 돌아가기</a>${heading(p?'프로젝트 수정':'프로젝트 등록','')}<form id="project-form" class="panel form-panel" data-project-id="${p?.id||'new'}"><section class="document-import" id="document-import"></section><div class="form-grid">${field('name','프로젝트 제목',p?.name)}${field('owner','담당자 이름',p?.owner)}<div class="field"><label for="project-sheetProjectId">${p?'프로젝트 ID':'Google Sheets 프로젝트 ID (선택)'}</label><input id="project-sheetProjectId" name="sheetProjectId" type="text" maxlength="80" value="${escapeHtml(p?.id||'')}" ${p?'readonly':''} placeholder="시트 연동 시 입력"><p class="help">${p?'등록 후에는 ID를 변경할 수 없습니다.':'시트의 프로젝트 탭 projectId와 정확히 같게 입력하세요. 비워 두면 내부 ID를 자동 생성합니다.'}</p></div><div class="field full"><label for="project-description">프로젝트 설명</label><textarea id="project-description" name="description" class="short-textarea" required>${escapeHtml(p?.description||'')}</textarea></div>${field('start','신청 시작일',p?.start||'','date')}${field('deadlineAt','신청 마감 시각',p?.deadlineAt||'','datetime-local')}${field('event','행사·운영 일정',p?.event||'','date')}${field('applicationUrl','신청 링크',p?.applicationUrl||'','url',false)}${field('location','장소',p?.location||'','text',false)}${field('audience','문서상 참여 대상',p?.audience||'','text',false)}${field('capacity','정원·선정 조건',p?.capacity||'','text',false)}<div class="field full"><label for="project-requirements">신청 방법·유의사항·행사 시간</label><textarea id="project-requirements" name="requirements" class="short-textarea">${escapeHtml(p?.requirements||'')}</textarea><p class="help">문서상 대상은 참고 정보입니다. 실제 대상 동료는 아래 명단에서 선택하세요.</p></div><div class="field"><label for="project-confirmationMode">신청 후 확정 방식</label><select id="project-confirmationMode" name="confirmationMode" required><option value="">확인 후 선택</option><option value="immediate" ${p?.confirmationMode==='immediate'?'selected':''}>신청 즉시 확정</option><option value="separate" ${p?.confirmationMode==='separate'?'selected':''}>별도 확인·승인·선정 후 확정</option></select></div><div class="field"><label for="project-type">종류</label><select id="project-type" name="type"><option value="행사" ${p?.type==='행사'?'selected':''}>행사</option><option value="복지" ${p?.type==='복지'?'selected':''}>복지</option><option value="이벤트" ${p?.type==='이벤트'?'selected':''}>이벤트</option></select></div><div class="field"><label for="project-voluntaryGoalRate">자율 신청 목표 (%)</label><input id="project-voluntaryGoalRate" name="voluntaryGoalRate" type="number" min="1" max="100" step="1" value="${p?.voluntaryGoalRate==null?'':Math.round(p.voluntaryGoalRate*100)}" placeholder="설정하지 않음"><p class="help">설정하면 D-3·D-1에 목표 미달 여부를 확인합니다.</p></div>${reminderPolicyFields(p)}<div class="field"><label for="project-lifecycle">운영 상태</label><select id="project-lifecycle" name="lifecycle"><option value="active" ${!p?.lifecycle||p.lifecycle==='active'?'selected':''}>진행 중</option><option value="cancelled" ${p?.lifecycle==='cancelled'?'selected':''}>프로젝트 취소</option><option value="closed" ${p?.lifecycle==='closed'?'selected':''}>운영 종료</option></select></div><div class="field full"><label for="project-changeReason">마감·운영 상태 변경 사유</label><input id="project-changeReason" name="changeReason" type="text" maxlength="500" placeholder="마감 연장, 프로젝트 취소, 운영 종료 시 입력"></div><div class="field full">${employeePickerMarkup(p)}</div></div><p id="project-form-error" class="error-message" role="alert" ${projectFormError?'':'hidden'}>${escapeHtml(projectFormError)}</p><div class="actions"><button class="button primary" type="submit">${p?'변경 저장':'프로젝트 등록'}</button></div></form>`;
+  return `<a href="${p?`#project/${p.id}`:'#projects'}" class="back-link">${icon('back')} 프로젝트로 돌아가기</a>${heading(p?'프로젝트 수정':'프로젝트 등록','')}<form id="project-form" class="panel form-panel" data-project-id="${p?.id||'new'}"><section class="document-import" id="document-import"></section><div class="form-grid">${field('name','프로젝트 제목',p?.name)}${field('owner','담당자 이름',p?.owner)}<div class="field"><label for="project-sheetProjectId">${p?'프로젝트 ID':'Google Sheets 프로젝트 ID (선택)'}</label><input id="project-sheetProjectId" name="sheetProjectId" type="text" maxlength="80" value="${escapeHtml(p?.id||'')}" ${p?'readonly':''} placeholder="시트 연동 시 입력"><p class="help">${p?'등록 후에는 ID를 변경할 수 없습니다.':'시트의 프로젝트 탭 projectId와 정확히 같게 입력하세요. 비워 두면 내부 ID를 자동 생성합니다.'}</p></div><div class="field full"><label for="project-description">프로젝트 설명</label><textarea id="project-description" name="description" class="short-textarea" required>${escapeHtml(p?.description||'')}</textarea></div>${field('start','신청 시작일',p?.start||'','date')}${field('deadlineAt','신청 마감 시각',p?.deadlineAt||'','datetime-local')}${field('event','행사·운영 일정',p?.event||'','date')}${field('applicationUrl','신청 링크',p?.applicationUrl||'','url',false)}${field('location','장소',p?.location||'','text',false)}${field('audience','문서상 참여 대상',p?.audience||'','text',false)}${field('capacity','정원·선정 조건',p?.capacity||'','text',false)}<div class="field full"><label for="project-requirements">신청 방법·유의사항·행사 시간</label><textarea id="project-requirements" name="requirements" class="short-textarea">${escapeHtml(p?.requirements||'')}</textarea><p class="help">문서상 대상은 참고 정보입니다. 실제 대상 동료는 아래 명단에서 선택하세요.</p></div><div class="field"><label for="project-confirmationMode">신청 후 확정 방식</label><select id="project-confirmationMode" name="confirmationMode" required><option value="">확인 후 선택</option><option value="immediate" ${p?.confirmationMode==='immediate'?'selected':''}>신청 즉시 확정</option><option value="separate" ${p?.confirmationMode==='separate'?'selected':''}>별도 확인·승인·선정 후 확정</option></select></div><div class="field"><label for="project-type">종류</label><select id="project-type" name="type"><option value="행사" ${p?.type==='행사'?'selected':''}>행사</option><option value="복지" ${p?.type==='복지'?'selected':''}>복지</option><option value="이벤트" ${p?.type==='이벤트'?'selected':''}>이벤트</option></select></div><div class="field"><label for="project-voluntaryGoalRate">자율 신청 목표 (%)</label><input id="project-voluntaryGoalRate" name="voluntaryGoalRate" type="number" min="1" max="100" step="1" value="${p?.voluntaryGoalRate==null?'':Math.round(p.voluntaryGoalRate*100)}" placeholder="설정하지 않음"><p class="help">설정하면 D-3·D-1에 목표 미달 여부를 확인합니다.</p></div>${reminderPolicyFields(p)}<div class="field"><label for="project-lifecycle">운영 상태</label><select id="project-lifecycle" name="lifecycle"><option value="active" ${!p?.lifecycle||p.lifecycle==='active'?'selected':''}>진행 중</option><option value="cancelled" ${p?.lifecycle==='cancelled'?'selected':''}>프로젝트 취소</option><option value="closed" ${p?.lifecycle==='closed'?'selected':''}>운영 종료</option></select></div><div class="field full"><label for="project-changeReason">마감·운영 상태 변경 사유</label><input id="project-changeReason" name="changeReason" type="text" maxlength="500" placeholder="마감 연장, 프로젝트 취소, 운영 종료 시 입력"></div><div class="field full">${employeePickerMarkup(p)}</div></div><p id="project-form-error" class="error-message" role="alert" ${projectFormError?'':'hidden'}>${escapeHtml(projectFormError)}</p><div class="actions form-submit"><button class="button" type="button" data-action="open-registration-summary">운영 정보 미리보기</button><button class="button primary" type="submit">${p?'변경 저장':'프로젝트 등록'}</button></div></form>`;
 }
 function projectFormSignature(){
   const form=$('#project-form');if(!form)return '';
@@ -766,20 +775,57 @@ function projectFormSignature(){
   });
 }
 function projectFormDirty(){return Boolean(projectFormBaseline&&$('#project-form')&&projectFormSignature()!==projectFormBaseline);}
-function updateRegistrationSummary(){
-  const form=$('#project-form');if(!form)return;
+function registrationTicketPreviewMarkup(project,isNew){
+  const preview=[];
+  const formatDue=ticket=>new Date(ticket.dueAt).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',year:'numeric',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+  try{
+    const first=evaluateFirstNoticeTicket({project,now:new Date().toISOString(),existingTickets:isNew?[]:TICKETS.filter(ticket=>ticket.project===project.id&&ticket.kind==='initial')});
+    preview.push(...first.tickets.map(ticket=>({title:'첫 안내 준비',when:isNew&&!project.firstNoticeReviewAt?'등록 직후':formatDue(ticket),state:stateLabel(ticket.state)})));
+  }catch{preview.push({title:'첫 안내 준비',when:'검토 시각 확인 필요',state:'확인 필요'});}
+  let scheduleNote='';
+  if(!project.start||!project.deadlineAt)scheduleNote='신청 시작일과 마감 시각을 입력하면 리마인드 일정을 볼 수 있어요.';
+  else if(!calendarCoversProject(project))scheduleNote='이 마감 연도의 공휴일 기준을 확인한 뒤 리마인드 예정 시각을 표시할 수 있어요.';
+  else try{
+    const result=evaluateReminderCheckpoints({project,calendar:officialCalendar,now:new Date().toISOString(),
+      existingTickets:isNew?[]:TICKETS.filter(ticket=>ticket.project===project.id&&['required','voluntary'].includes(ticket.kind))});
+    preview.push(...result.tickets.map(ticket=>({title:ticket.title,when:formatDue(ticket),state:stateLabel(ticket.state)})));
+    if(result.needsReview.length)scheduleNote=`신청 시작 전으로 조정되는 점검 ${result.needsReview.length}건은 날짜를 확인해야 해요.`;
+    else if(!result.tickets.length)scheduleNote='현재 설정과 대상 명단에 맞는 리마인드 일정이 없어요.';
+  }catch{scheduleNote='신청 시작일·마감 시각과 안내 점검 설정을 확인해주세요.';}
+  const voluntaryCount=project.targetIds.filter(id=>!project.requiredIds.includes(id)).length;
+  const goalNote=!voluntaryCount?'자율 신청 대상이 없어 자율 점검 티켓은 만들지 않아요.'
+    :project.voluntaryGoalRate==null?'자율 신청 목표가 없어도 D-3·D-1에 신청 현황을 확인해요.'
+      :'자율 신청 목표를 기준으로 D-3·D-1에 신청 현황을 확인해요.';
+  return `<section class="registration-ticket-preview"><h3>저장 후 예상 티켓 ${preview.length}건</h3><p class="help">규칙에 따른 검토 시점입니다. 안내가 자동 발송되지는 않아요. 신청 현황이 확인되지 않으면 대상 수 없이 시점만 보여줘요.</p>${preview.length?`<ul>${preview.map(ticket=>`<li><strong>${escapeHtml(ticket.title)}</strong><span>${escapeHtml(ticket.when)} · ${escapeHtml(ticket.state)}</span></li>`).join('')}</ul>`:''}${scheduleNote?`<p class="help">${escapeHtml(scheduleNote)}</p>`:''}<p class="help">${escapeHtml(goalNote)}</p></section>`;
+}
+function openRegistrationSummary(form){
+  if(!form)return;
   const values=new FormData(form),old=form.dataset.projectId==='new'?null:getProject(form.dataset.projectId);
+  const number=(key,fallback)=>{const value=Number(values.get(key));return Number.isFinite(value)?value:fallback;};
+  const targetIds=[...form.querySelectorAll('[data-target-member]:checked')].map(input=>Number(input.dataset.targetMember));
+  const requiredIds=[...form.querySelectorAll('[data-required-member]:checked')].map(input=>Number(input.dataset.requiredMember));
+  const goal=String(values.get('voluntaryGoalRate')||'');
   const project={...(old||{}),name:String(values.get('name')||''),owner:String(values.get('owner')||''),
     audience:String(values.get('audience')||''),requirements:String(values.get('requirements')||''),
-    deadlineAt:String(values.get('deadlineAt')||''),event:String(values.get('event')||''),
+    id:old?.id||'registration-preview',createdAt:old?.createdAt||new Date().toISOString(),
+    start:String(values.get('start')||''),deadlineAt:String(values.get('deadlineAt')||''),event:String(values.get('event')||''),
+    firstNoticeReviewAt:String(values.get('firstNoticeReviewAt')||''),lifecycle:String(values.get('lifecycle')||'active'),
+    voluntaryGoalRate:goal===''?null:Number(goal)/100,
+    reminderPolicy:{requiredCheckHour:number('requiredCheckHour',10),finalHoursBefore:number('finalHoursBefore',4),
+      voluntaryThresholds:[{daysBefore:3,goalFraction:number('voluntaryD3Percent',70)/100},{daysBefore:1,goalFraction:number('voluntaryD1Percent',90)/100}],
+      businessStartHour:number('businessStartHour',9),businessEndHour:number('businessEndHour',18)},
     location:String(values.get('location')||''),applicationUrl:String(values.get('applicationUrl')||''),
+    targetIds,requiredIds,
     sourceReviews:Object.values({...Object.fromEntries((old?.sourceReviews||[]).map(row=>[row.field,row])),...appliedFieldReviews}),
     sourceIssues:appliedSourceIssues??old?.sourceIssues??[]};
-  const summary=buildRegistrationSummary(project);
-  const markup=`<h2>저장 전 운영 정보 요약</h2><p class="help">자료에서 가져온 값과 직접 입력한 값을 확인해주세요. 확인이 필요한 항목은 저장 후 안내 작성에서 다시 검토할 수 있습니다.</p><dl class="registration-summary-list">${summary.rows.map(row=>`<div><dt>${escapeHtml(row.label)}</dt><dd>${escapeHtml(row.value||'입력되지 않음')} <small>· ${escapeHtml(row.source)} · ${row.needsReview?'확인 필요':'확인됨'}</small></dd></div>`).join('')}</dl>`;
-  let target=$('#registration-summary');
-  if(!target){form.querySelector('.actions').insertAdjacentHTML('beforebegin','<section id="registration-summary" class="registration-summary" aria-live="polite"></section>');target=$('#registration-summary');}
-  target.innerHTML=markup;
+  const summary=buildRegistrationSummary(project),dialog=$('#registration-summary-dialog');
+  dialog.innerHTML=`<div class="dialog-heading"><div><p class="eyebrow">저장 직전 확인</p><h2 id="registration-summary-title">운영 정보 요약</h2><p>입력한 내용과 예상 티켓을 살펴보세요.</p></div><button type="button" class="button icon-button" data-action="close-registration-summary" aria-label="운영 정보 요약 닫기">${icon('close')}</button></div><div class="dialog-body">${registrationTicketPreviewMarkup(project,!old)}<dl class="registration-summary-list">${summary.rows.map(row=>`<div><dt>${escapeHtml(row.label)}</dt><dd>${escapeHtml(row.value||'입력되지 않음')}<small>${escapeHtml(row.source)}${row.source==='확인 필요'?'':` · ${row.needsReview?'확인 필요':'확인됨'}`}</small></dd></div>`).join('')}</dl></div><div class="dialog-footer"><span class="help">저장을 누르기 전까지 운영 정보는 바뀌지 않아요.</span><div class="actions"><button type="button" class="button" data-action="close-registration-summary">입력칸으로 돌아가기</button><button type="button" class="button primary" data-action="confirm-project-save">확인하고 저장</button></div></div>`;
+  registrationSummaryOrigin=document.activeElement;dialog.showModal();
+}
+function closeRegistrationSummary(restoreFocus=true){
+  const dialog=$('#registration-summary-dialog');if(dialog.open)dialog.close();
+  if(restoreFocus&&registrationSummaryOrigin?.isConnected)registrationSummaryOrigin.focus();
+  registrationSummaryOrigin=null;
 }
 function refreshMemberPicker() {
   const search=$('#member-search')?.value.trim().toLowerCase()||'',team=$('#member-team')?.value||'all';
@@ -795,7 +841,11 @@ function refreshMemberPicker() {
   $('#member-count').textContent=`대상 ${document.querySelectorAll('[data-target-member]:checked').length}명 · 필수 ${document.querySelectorAll('[data-required-member]:checked').length}명`;
 }
 function saveProjectForm(event) {
-  event.preventDefault();if(!requireOperator())return;const form=event.target,id=form.dataset.projectId,old=id==='new'?null:getProject(id),data=new FormData(form);
+  event.preventDefault();if(!requireOperator())return;openRegistrationSummary(event.target);
+}
+function commitProjectForm(form) {
+  if(!requireOperator())return;
+  const id=form.dataset.projectId,old=id==='new'?null:getProject(id),data=new FormData(form);
   try {
     if(operatorConflict)throw new Error('다른 탭의 운영 정보가 바뀌었습니다. 상단의 운영 정보 충돌을 먼저 확인해주세요.');
     const targetIds=[...form.querySelectorAll('[data-target-member]:checked')].map(input=>Number(input.dataset.targetMember));
@@ -1087,13 +1137,12 @@ function render() {
         ...['requiredCheckHour','finalHoursBefore','voluntaryD3Percent','voluntaryD1Percent','businessStartHour','businessEndHour'].map(key=>$(`#project-${key}`)?.closest('.field'))];
       nodes.filter(Boolean).forEach(node=>advanced.append(node));
     }
-    updateRegistrationSummary();
     refreshMemberPicker();
     disposeDocumentImport=mountDocumentImport($('#document-import'),{
-      loggedIn:()=>Boolean(cloudUser),login:openCloudDialog,
+      loggedIn:()=>Boolean(cloudUser),login:openCloudDialog,accessToken,
       getValue:field=>$(`#project-${field}`)?.value||'',
       saved:getProject(r.id)?.sourceReviews||[],
-      apply:(rows,issues)=>{for(const row of rows){const input=$(`#project-${row.field}`);if(input){input.value=row.appliedValue;appliedFieldReviews[row.field]=row;}}appliedSourceIssues=issues;appliedDocumentName=[...new Set(rows.flatMap(row=>row.evidence.map(e=>e.sourceName)))].join(' · ');updateRegistrationSummary();toast(`${rows.length}개 항목을 채웠어요. 확인 후 저장해주세요.`);},
+      apply:(rows,issues,{quiet=false}={})=>{for(const row of rows){const input=$(`#project-${row.field}`);if(input){input.value=row.appliedValue;appliedFieldReviews[row.field]=row;const wrapper=input.closest('.field');wrapper.classList.add('analysis-applied');let note=wrapper.querySelector('.analysis-field-note');if(!note){note=document.createElement('p');note.className='analysis-field-note';wrapper.append(note);}note.textContent='자료에서 채움 · 아래에서 수정 가능';}}appliedSourceIssues=issues;appliedDocumentName=[...new Set(Object.values(appliedFieldReviews).flatMap(row=>row.evidence.map(e=>e.sourceName)))].join(' · ');if(!quiet&&rows.length)toast(`${rows.length}개 항목을 입력칸에 채웠어요.`);},
     });
     projectFormBaseline=projectFormSignature();
   }
@@ -1355,6 +1404,9 @@ document.addEventListener('click',event=>{
   if(button.dataset.removeChannel&&t){const d=getDraft(t);d.channels=d.channels.filter(id=>id!==button.dataset.removeChannel);d.confirmed=false;updateRecipients(t);return;}
   if(button.dataset.recipientsPage&&t){recipientPage+=Number(button.dataset.recipientsPage);$('#recipient-list').innerHTML=recipientTable(audience(getProject(t.project),getDraft(t)).list,getProject(t.project));return;}
   switch(button.dataset.action){
+    case 'open-registration-summary':openRegistrationSummary($('#project-form'));break;
+    case 'close-registration-summary':closeRegistrationSummary();break;
+    case 'confirm-project-save':{const form=$('#project-form');closeRegistrationSummary(false);if(form?.reportValidity())commitProjectForm(form);break;}
     case 'close-cloud':closeCloudDialog();break;
     case 'retry-operator-state':operatorSaveStatus='pending';operatorConflict=null;void saveOperatorState();closeCloudDialog();break;
     case 'load-operator-state':if(operatorConflict){applyOperatorState(operatorConflict);closeCloudDialog();if(route().view==='edit-project')render();toast('서버 운영 정보를 불러왔어요.');}break;
@@ -1445,7 +1497,7 @@ document.addEventListener('change',async event=>{
   if(el.id==='preview-ack'){$('[data-action="confirm-preview"]').disabled=!el.checked;return;}
   if(r.view==='edit-project'){
     if(el.id==='member-team'||el.matches('[data-target-member], [data-required-member]'))refreshMemberPicker();
-    updateRegistrationSummary();
+    if(el.matches('#project-form [id^="project-"]'))disposeDocumentImport?.resolveManual?.(el.id.slice(8),el.value);
     return;
   }
   if(r.view!=='review')return;const t=getTicket(r.id),d=getDraft(t);
@@ -1460,7 +1512,7 @@ document.addEventListener('change',async event=>{
   d.confirmed=false;recipientPage=0;updateRecipients(t);
 });
 document.addEventListener('input',event=>{
-  if(event.target.closest('#project-form'))updateRegistrationSummary();
+  if(event.target.matches('#project-form [id^="project-"]')){const wrapper=event.target.closest('.field');wrapper?.classList.remove('analysis-applied');wrapper?.querySelector('.analysis-field-note')?.remove();}
   if(event.target.id==='roster-search'){rosterSearch=event.target.value;filterRoster();return;}
   if(event.target.id==='member-search'){refreshMemberPicker();return;}
   if(event.target.id==='recipient-search'){recipientSearch=event.target.value;filterRecipientRows();return;}
@@ -1470,6 +1522,7 @@ document.addEventListener('input',event=>{
 document.addEventListener('submit',event=>{if(event.target.id==='cloud-login-form')loginCloud(event);if(event.target.id==='history-form')saveHistoryForm(event);if(event.target.id==='new-history-form')saveNewHistoryForm(event);if(event.target.id==='project-form')saveProjectForm(event);if(event.target.id==='cancel-form')saveCancelForm(event);if(event.target.id==='ticket-decision-form')saveTicketDecision(event);});
 $('#history-dialog').addEventListener('cancel',event=>{event.preventDefault();closeHistory();});
 $('#cancel-dialog').addEventListener('cancel',event=>{event.preventDefault();closeCancel();});
+$('#registration-summary-dialog').addEventListener('cancel',event=>{event.preventDefault();closeRegistrationSummary();});
 $('#send-preview-dialog').addEventListener('cancel',event=>{event.preventDefault();closeSendPreview();});
 $('#cloud-dialog').addEventListener('cancel',event=>{event.preventDefault();closeCloudDialog();});
 $('#ticket-dialog').addEventListener('cancel',event=>{event.preventDefault();closeTicketDecision();});
@@ -1493,7 +1546,7 @@ window.addEventListener('hashchange',()=>{
     if(previousDraft){previousDraft.confirmed=false;previousDraft.confirmedSignature='';}
   }
   previousRoute=route();
-  if($('#history-dialog').open)closeHistory();if($('#cancel-dialog').open)closeCancel();if($('#send-preview-dialog').open)closeSendPreview();activeTab='tickets';rosterSearch='';rosterFilter='all';recipientPage=0;recipientSearch='';resetArmed=false;projectFormError='';appliedDocumentName='';appliedFieldReviews={};appliedSourceIssues=null;
+  if($('#history-dialog').open)closeHistory();if($('#cancel-dialog').open)closeCancel();if($('#send-preview-dialog').open)closeSendPreview();if($('#registration-summary-dialog').open)closeRegistrationSummary(false);activeTab='tickets';rosterSearch='';rosterFilter='all';recipientPage=0;recipientSearch='';resetArmed=false;projectFormError='';appliedDocumentName='';appliedFieldReviews={};appliedSourceIssues=null;
   render();window.scrollTo({top:0,behavior:'instant'});$('#content').focus({preventScroll:true});
   if(operatorDeferredState&&route().view!=='edit-project'){
     if(operatorDirty)scheduleOperatorSave();else void refreshOperatorState();
