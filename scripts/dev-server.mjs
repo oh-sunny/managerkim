@@ -38,6 +38,7 @@ const assets = new Map([
   ['/fonts/PretendardVariable.woff2', ['fonts/PretendardVariable.woff2', 'font/woff2']],
   ['/document-import.css', ['document-import.css', 'text/css; charset=utf-8']],
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
+  ['/supabase-browser.js', ['supabase-browser.js', 'text/javascript; charset=utf-8']],
   ['/data.js', ['data.js', 'text/javascript; charset=utf-8']],
   ['/rule-engine.js', ['rule-engine.js', 'text/javascript; charset=utf-8']],
   ['/document-extract.js', ['document-extract.js', 'text/javascript; charset=utf-8']],

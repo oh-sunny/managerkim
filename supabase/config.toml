@@ -1,0 +1,2 @@
+[functions.sync-sheets]
+verify_jwt = true

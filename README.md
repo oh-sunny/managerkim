@@ -189,3 +189,36 @@ Vercel 함수의 요청·응답 크기 제한에 맞춰 첨부 파일은 4MB 이
 `tests/`, `supabase/migrations/`, `.env`, `.git/`는 테스트와 입력 자료, DB 재구성 이력, 로컬 연결 설정, 버전 이력을 각각 보관합니다.
 
 추가로 구조를 정리한다면 `scripts/`의 서버 모듈을 `server/`로 분리하고, `spec/`을 `docs/spec/`으로 합칠 수 있습니다. 실제 이동 시 import·문서 링크와 로컬·Vercel 실행 경로를 함께 수정해야 합니다.
+# Supabase 시간별 시트 동기화 (작업 브랜치)
+
+`codex/supabase-scheduled-sync`에서는 웹앱이 Supabase Auth에 직접 로그인하고,
+`operator_states`, `notice_drafts`, `sheet_sync_snapshots`, `automation_tickets`를
+사용자 JWT와 RLS로 직접 읽습니다. Vercel API는 Gemini 분석·생성 및 안내 파일 업로드에만
+사용하며, 이 요청에도 같은 사용자 JWT를 보냅니다. 공개 가능한 publishable key와
+Supabase URL은 `/api/status`가 전달합니다. 비밀번호와 service role key는 웹앱에 저장하지 않습니다.
+
+예약 작업은 `supabase/functions/sync-sheets/index.ts`에 있습니다. 시트 네 탭을 읽고
+신청·취소 이력을 검증한 뒤 `prototype/rule-engine.js`와 같은 규칙으로 티켓을 평가합니다.
+성공한 최신 스냅샷은 한 행만 갱신하며, `sheet_application_events`에는 처음 본 사건만
+추가합니다. 이미 저장한 사건이 시트에서 사라지거나 바뀌면 동기화를 중단합니다.
+
+원격 활성화 순서:
+
+1. `supabase/migrations/20261007120000_scheduled_sheet_sync.sql`을 적용합니다.
+2. Supabase Edge Function Secrets에 `SYNC_OWNER_ID`(운영자 Auth UUID),
+   `GOOGLE_SHEETS_SPREADSHEET_ID`, `GOOGLE_SHEETS_CLIENT_EMAIL`,
+   `GOOGLE_SHEETS_PRIVATE_KEY`를 설정합니다. 로컬 형식은
+   `supabase/functions/.env.example`을 참고합니다. 서비스 계정에는 해당 시트의
+   읽기 권한을 부여합니다.
+3. `npm run build:edge`로 공통 규칙 코드를 함수 폴더에 복사한 다음
+   `supabase functions deploy sync-sheets`로 배포하고, 운영자 로그인 후
+   웹앱의 **지금 가져오기**를 눌러 `sheet_sync_runs`와 화면을 확인합니다.
+4. Supabase Dashboard에서 Cron과 `pg_net`을 활성화합니다. Vault에
+   `sheet_sync_function_url`(함수 전체 URL)과 `sheet_sync_service_key`(legacy
+   service_role JWT)를 추가합니다. 비밀값을 SQL 파일이나 Git에 넣지 않습니다.
+5. `supabase/cron-hourly.sql`을 실행합니다. 매시 정각(UTC)에 한 번 실행됩니다.
+   `sheet_sync_runs`의 마지막 성공 시각과 오류, Cron 실행 기록을 확인합니다.
+
+`SUPABASE_SERVICE_ROLE_KEY`는 Edge Function 런타임이 주입합니다. Cron이 함수에
+전달할 토큰은 Vault에만 저장합니다. `SYNC_OWNER_ID`는 현재 개인 프로젝트의
+단일 운영자 연결을 위한 설정이며, 다른 운영자와 공유하는 모델은 별도 설계가 필요합니다.

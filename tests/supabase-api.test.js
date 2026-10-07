@@ -60,10 +60,27 @@ test('notice concurrency lock is released on failure and safe errors omit provid
 
 test('configured API requires authentication and rejects cross-origin mutations',async()=>{
   const handler=createSupabaseApi({...config,fetcher:async()=>response({},401)});
-  assert.deepEqual((await call(handler,'/api/status')).body,{configured:true});
+  assert.deepEqual((await call(handler,'/api/status')).body,{configured:true,supabaseUrl:config.url,publishableKey:config.key});
   assert.equal((await call(handler,'/api/drafts')).status,401);
   const rejected=await call(handler,'/api/drafts/health-final',{method:'PUT',body:{expectedVersion:0,data:draft},headers:{...cookie,origin:'https://other.example'}});
   assert.equal(rejected.status,403);
+});
+
+test('existing server APIs accept a browser Supabase bearer token without a Vercel login cookie',async()=>{
+  const handler=createSupabaseApi({...config,fetcher:async(url,options)=>{
+    assert.equal(options.headers.Authorization,'Bearer browser-token');
+    return response({id:'operator-1',email:'operator@example.com'});
+  }});
+  const result=await call(handler,'/api/auth/session',{headers:{authorization:'Bearer browser-token'}});
+  assert.equal(result.status,200);
+  assert.equal(result.body.user.id,'operator-1');
+});
+
+test('new browser login clears old Vercel cookies without revoking the new Supabase session',async()=>{
+  const handler=createSupabaseApi({...config,fetcher:async()=>{throw new Error('must not call Supabase');}});
+  const result=await call(handler,'/api/auth/clear-legacy-cookie',{method:'POST',headers:cookie});
+  assert.equal(result.status,200);
+  assert.match(result.headers['set-cookie'][0],/Max-Age=0/);
 });
 
 test('Google Sheet sync is authenticated and does not return data when the source fails',async()=>{

@@ -70,11 +70,13 @@ export function createSupabaseApi({url='',key='',fetcher=fetch,analyzer=null,not
     return contentType.includes('json')&&raw?JSON.parse(raw):raw;
   };
   async function authenticated(req,res) {
-    let token=cookie(req,'sb_access');
+    const bearer=String(req.headers.authorization||'').match(/^Bearer (\S+)$/i)?.[1];
+    let token=bearer||cookie(req,'sb_access');
     if(token){
       const response=await upstream('/auth/v1/user',{},token);
       if(response.ok)return {token,user:await readUpstream(response)};
     }
+    if(bearer)return null;
     const refresh=cookie(req,'sb_refresh');
     if(refresh){
       const response=await upstream('/auth/v1/token?grant_type=refresh_token',{
@@ -101,7 +103,7 @@ export function createSupabaseApi({url='',key='',fetcher=fetch,analyzer=null,not
 
   return async function handleApi(req,res,pathname) {
     try {
-      if(pathname==='/api/status' && req.method==='GET'){json(res,200,{configured});return;}
+      if(pathname==='/api/status' && req.method==='GET'){json(res,200,{configured,supabaseUrl:configured?base:null,publishableKey:configured?key:null});return;}
       if(pathname==='/api/sheets/status' && req.method==='GET'){
         json(res,200,{configured:sheetService?.configured===true,spreadsheetId:sheetService?.spreadsheetId||null});return;
       }
@@ -127,6 +129,9 @@ export function createSupabaseApi({url='',key='',fetcher=fetch,analyzer=null,not
         const token=cookie(req,'sb_access');
         if(token)await upstream('/auth/v1/logout',{method:'POST'},token).catch(()=>{});
         clearCookies(res);json(res,200,{signedOut:true});return;
+      }
+      if(pathname==='/api/auth/clear-legacy-cookie' && req.method==='POST'){
+        clearCookies(res);json(res,200,{cleared:true});return;
       }
       const auth=await authenticated(req,res);
       if(!auth){json(res,401,{error:'Supabase 계정으로 로그인해주세요.'});return;}

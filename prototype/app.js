@@ -6,6 +6,7 @@ import {NOTICE_PURPOSES,BRIEF_LABELS,makeNoticeBrief,generationSignature,acceptN
 import {projectSendSnapshot,sheetSendSnapshot} from './send-preflight.js';
 import {mergeSheetApplications} from './sheet-application-merge.js';
 import {quickRecipientSelection,recipientGroups,recipientCounts,recipientGroupLabel} from './recipient-selection.js';
+import {configureSupabase,restoreSupabaseUser,signInSupabase,signOutSupabase,accessToken,supabaseRequest,readOperatorState,saveOperatorState as saveStateDirect,readSheetSnapshot,readAutomationTickets,readDrafts,readDraft,saveDraft,createFileUrl} from './supabase-browser.js';
 const $ = selector => document.querySelector(selector);
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const icons = {
@@ -234,7 +235,7 @@ async function saveOperatorState(){
   operatorSaving=true;operatorSaveStatus='saving';renderCloudButton();
   const revision=operatorRevision,payload=structuredClone(operatorPayload());
   try{
-    const result=await cloudRequest('/api/state',{method:'PUT',body:{expectedVersion:operatorVersion,data:payload}});
+    const result=await saveStateDirect(operatorVersion,payload);
     operatorVersion=result.version;operatorOwnerId=cloudUser.id;operatorDirty=operatorRevision!==revision;
     operatorSaveStatus=operatorDirty?'pending':'saved';persist({remote:false});
   }catch(error){operatorConflict=error.status===409?error.current:null;operatorSaveStatus=error.status===409?'conflict':'error';renderCloudButton();}
@@ -253,7 +254,7 @@ function applyOperatorState(record){
 }
 async function hydrateOperatorState(){
   const startedAtRevision=operatorRevision;
-  const {state}=await cloudRequest('/api/state');
+  const {state}=await readOperatorState();
   if(!state){operatorVersion=0;operatorConflict=null;operatorSaveStatus='pending';operatorDirty=true;scheduleOperatorSave();return;}
   if((operatorDirty||operatorRevision!==startedAtRevision)&&operatorVersion!==state.version){operatorConflict=state;operatorSaveStatus='conflict';renderCloudButton();return;}
   applyOperatorState(state);
@@ -270,7 +271,7 @@ function prepareOperatorCache(){
 async function refreshOperatorState(){
   if(!cloudUser||operatorSaving)return;
   try{
-    const {state}=await cloudRequest('/api/state');
+    const {state}=await readOperatorState();
     if(!state||state.version===operatorVersion)return;
     if(operatorDirty){operatorConflict=state;operatorSaveStatus='conflict';renderCloudButton();}
     else applyOperatorState(state);
@@ -284,7 +285,7 @@ function reconcileProjectTickets(project){
     for(const ticket of TICKETS.filter(t=>t.project===project.id))if(['pending','scheduled','deferred'].includes(ticket.state)){ticket.state='retired';ticket.lifecycleReason=project.lifecycle==='cancelled'?'프로젝트 취소':'운영 종료';changed=true;}
     return changed;
   }
-  if(!officialCalendar||!project.lastCheckedAt||project.dataKind==='sample')return false;
+  if(!officialCalendar||!project.lastCheckedAt||['sample','sheet'].includes(project.dataKind))return false;
   const output=evaluateReminderTickets({project,applicationRecords:applications,employees:EMPLOYEES,
     sync:{status:'success',lastSuccessAt:checkedAtIso(project.lastCheckedAt)},calendar:officialCalendar,
     now:new Date().toISOString(),policy:{maxDataAgeMinutes:1440},existingTickets:prior,sentRecords:records});
@@ -314,22 +315,19 @@ async function refreshOfficialCalendarAndTickets(){
   }catch(error){officialCalendar=null;holidayError=error.message;if(route().view!=='edit-project')render();}
 }
 async function cloudRequest(path,{method='GET',body,headers={}}={}) {
-  const response=await fetch(path,{method,credentials:'same-origin',headers:{...(body && !(body instanceof Blob)?{'Content-Type':'application/json'}:{}),...headers},body:body instanceof Blob?body:body===undefined?undefined:JSON.stringify(body),cache:'no-store'});
+  const token=path==='/api/status'||path==='/api/sheets/status'?null:await accessToken();
+  const response=await fetch(path,{method,headers:{...(body && !(body instanceof Blob)?{'Content-Type':'application/json'}:{}),...(token?{Authorization:`Bearer ${token}`} : {}),...headers},body:body instanceof Blob?body:body===undefined?undefined:JSON.stringify(body),cache:'no-store'});
   const result=await response.json().catch(()=>({error:'서버 응답을 읽지 못했습니다.'}));
   if(!response.ok)throw Object.assign(new Error(result.error||'서버 요청에 실패했습니다.'),{status:response.status,current:result.current});
   return result;
 }
-async function initializeSheetSource(){
-  try{sheetSourceStatus=await cloudRequest('/api/sheets/status');}
-  catch{sheetSourceStatus={configured:false,spreadsheetId:null};}
-  if(route().view==='home')render();
-}
+async function initializeSheetSource(){sheetSourceStatus.configured=cloudConfigured;if(route().view==='home')render();}
 function sheetSourcePanel(){
   const link=sheetSourceStatus.spreadsheetId?`<a href="https://docs.google.com/spreadsheets/d/${encodeURIComponent(sheetSourceStatus.spreadsheetId)}/edit" target="_blank" rel="noopener noreferrer">예시 스프레드시트 열기 ${icon('external')}</a>`:'';
   const last=sheetSync?.lastSuccessAt?new Date(sheetSync.lastSuccessAt).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}):null;
-  return `<section class="panel sheet-source-panel"><div><h2>Google 스프레드시트 원본</h2><p class="caption muted">버튼을 누를 때 직원명부·프로젝트·대상·신청이력 네 탭을 읽습니다. 자동 갱신은 아직 없습니다.</p><p class="caption">${sheetSyncError?escapeHtml(sheetSyncError):last?`마지막 가져오기: ${escapeHtml(last)} · 직원 ${sheetSync.employeeCount}명 · 이력 ${sheetSync.eventCount}건`:sheetSourceStatus.configured?'아직 가져오지 않았어요.':'웹앱의 Google Sheets 읽기 권한 설정이 필요합니다.'}</p>${link}</div><button class="button" data-action="sync-sheet" ${sheetSyncBusy||!sheetSourceStatus.configured||!cloudUser?'disabled':''}>${sheetSyncBusy?'가져오는 중…':'시트에서 가져오기'}</button></section>`;
+  return `<section class="panel sheet-source-panel"><div><h2>Google 스프레드시트 원본</h2><p class="caption muted">Supabase에 저장된 직원명부·프로젝트·대상·신청이력을 표시합니다. 정기 작업을 설정하면 매시간 갱신하고, 지금 가져오기를 누르면 바로 다시 확인해요.</p><p class="caption">${sheetSyncError?escapeHtml(sheetSyncError):last?`마지막 가져오기: ${escapeHtml(last)} · 직원 ${sheetSync.employeeCount}명 · 이력 ${sheetSync.eventCount}건`:sheetSourceStatus.configured?'첫 동기화를 기다리고 있어요.':'Supabase 연결 설정이 필요합니다.'}</p>${link}</div><button class="button" data-action="sync-sheet" ${sheetSyncBusy||!sheetSourceStatus.configured||!cloudUser?'disabled':''}>${sheetSyncBusy?'가져오는 중…':'지금 가져오기'}</button></section>`;
 }
-function applySheetSource(source){
+function applySheetSource(source,{remote=true}={}){
   if(source?.sync?.status!=='success'||!Array.isArray(source.employees)||!Array.isArray(source.sourceProjects)||!Array.isArray(source.projectTargets)||!Array.isArray(source.events)||!Array.isArray(source.applications))throw new Error('시트의 데이터 형식을 확인해주세요.');
   const teamByName=new Map(TEAMS.map(team=>[team.name,team.id]));
   const importedEmployees=source.employees.map(row=>{
@@ -367,12 +365,40 @@ function applySheetSource(source){
   applicationEvents=[...applicationEvents.filter(event=>!projectIds.has(event.projectId)),...importedEvents,...operatorEvents];
   TICKETS.forEach(ticket=>{if(projectIds.has(ticket.project)&&!ticket.key&&['pending','scheduled'].includes(ticket.state)){ticket.state='retired';ticket.lifecycleReason='Google Sheets 원본으로 현황 갱신';}});
   sheetSync={spreadsheetId:source.spreadsheetId,lastSuccessAt:source.sync.lastSuccessAt,employeeCount:importedEmployees.length,eventCount:source.events.length};
-  persist();render();void refreshOfficialCalendarAndTickets();
+  persist({remote});render();if(remote)void refreshOfficialCalendarAndTickets();
+}
+function applyAutomationTickets(rows){
+  let changed=false;
+  for(const row of rows){
+    const ticket=row.payload;
+    if(!ticket?.key||!ticket.project)continue;
+    const index=TICKETS.findIndex(item=>item.key===ticket.key);
+    if(index<0){TICKETS.push(ticket);changed=true;continue;}
+    const local=TICKETS[index];
+    if(['done','dismissed','deferred'].includes(local.state))continue;
+    if(JSON.stringify(local)!==JSON.stringify(ticket)){TICKETS[index]=ticket;changed=true;}
+  }
+  if(changed)persist({remote:false});
+}
+async function refreshAutomatedSheetState(){
+  if(!cloudUser)return;
+  const snapshot=await readSheetSnapshot();
+  if(snapshot?.payload){
+    sheetSourceStatus={configured:true,spreadsheetId:snapshot.payload.spreadsheetId};
+    if(!sheetSync?.lastSuccessAt||Date.parse(snapshot.last_success_at)>Date.parse(sheetSync.lastSuccessAt))applySheetSource(snapshot.payload,{remote:false});
+  }
+  applyAutomationTickets(await readAutomationTickets());
+  if(route().view!=='edit-project')render();
 }
 async function syncSheetSource(){
   if(!requireOperator()||sheetSyncBusy)return;
   sheetSyncBusy=true;sheetSyncError='';render();
-  try{applySheetSource(await cloudRequest('/api/sheets/sync',{method:'POST'}));toast('Google Sheets의 직원명부와 신청 이력을 가져왔어요.');}
+  try{
+    if(operatorDirty)await saveOperatorState();
+    if(operatorDirty)throw new Error('프로젝트 변경을 서버에 저장한 뒤 다시 가져와주세요.');
+    await supabaseRequest('/functions/v1/sync-sheets',{method:'POST'});
+    await refreshAutomatedSheetState();toast('Google Sheets의 직원명부와 신청 이력을 가져왔어요.');
+  }
   catch(error){sheetSyncError=error.message||'시트를 읽지 못했습니다.';render();}
   finally{sheetSyncBusy=false;render();}
 }
@@ -408,7 +434,7 @@ function applyCloudDraft(t,record) {
   persist({remote:false});
 }
 async function hydrateCloudDrafts() {
-  const {drafts:remote}=await cloudRequest('/api/drafts');
+  const {drafts:remote}=await readDrafts();
   const byId=new Map(remote.map(item=>[item.id,item]));
   for(const t of TICKETS.filter(item=>ticketState(item)==='pending')){
     const local=drafts[t.id],record=byId.get(t.id);
@@ -440,7 +466,7 @@ async function saveCloudDraft(t) {
   setCloudState(t,'saving');
   const request=(async()=>{
     try {
-      const result=await cloudRequest(`/api/drafts/${encodeURIComponent(t.id)}`,{method:'PUT',body:{expectedVersion:d._cloudVersion||0,data:cloudPayload(d)}});
+      const result=await saveDraft(t.id,d._cloudVersion||0,cloudPayload(d));
       d._cloudVersion=result.version;d._cloudDirty=(d._cloudRevision||0)!==revision;
       persist({remote:false});setCloudState(t,d._cloudDirty?'pending':'saved',{updatedAt:result.updated_at,remote:null});return true;
     } catch(error){setCloudState(t,error.status===409?'conflict':'error',{remote:error.current||null});return false;}
@@ -452,13 +478,18 @@ async function saveCloudDraft(t) {
 }
 async function initializeCloud() {
   try {
-    cloudConfigured=(await cloudRequest('/api/status')).configured;
+    const config=await cloudRequest('/api/status');
+    cloudConfigured=config.configured;
     if(cloudConfigured){
-      try {cloudUser=(await cloudRequest('/api/auth/session')).user;}
+      await fetch('/api/auth/clear-legacy-cookie',{method:'POST',credentials:'same-origin'}).catch(()=>{});
+      configureSupabase(config);
+      sheetSourceStatus.configured=true;
+      try {cloudUser=await restoreSupabaseUser();}
       catch {cloudUser=null;}
       if(cloudUser){
         prepareOperatorCache();
         try {await hydrateOperatorState();}catch {operatorSaveStatus='error';renderCloudButton();}
+        try {await refreshAutomatedSheetState();}catch(error){sheetSyncError=error.message;}
         try {await hydrateCloudDrafts();}catch {for(const t of TICKETS.filter(item=>ticketState(item)==='pending'))if(drafts[t.id])setCloudState(t,'error');}
         void refreshOfficialCalendarAndTickets();
       }
@@ -480,10 +511,10 @@ async function loginCloud(event) {
   const submit=$('#cloud-login-form button[type="submit"]'),error=$('#cloud-error');
   submit.disabled=true;error.hidden=true;
   try {
-    const result=await cloudRequest('/api/auth/login',{method:'POST',body:{email:$('#cloud-email').value.trim(),password:$('#cloud-password').value}});
-    cloudUser=result.user;
+    cloudUser=await signInSupabase($('#cloud-email').value.trim(),$('#cloud-password').value);
     prepareOperatorCache();
     await hydrateOperatorState();
+    await refreshAutomatedSheetState();
     await hydrateCloudDrafts();
     void refreshOfficialCalendarAndTickets();
     closeCloudDialog();renderCloudButton();if(route().view!=='edit-project')render();toast('Supabase에 연결했습니다.');
@@ -501,8 +532,9 @@ async function logoutCloud() {
   for(const t of TICKETS.filter(item=>drafts[item.id]?._cloudDirty)){
     if(!await saveCloudDraft(t)){toast('저장되지 않은 초안이 있어요. 저장 상태를 확인한 뒤 로그아웃해주세요.');return;}
   }
-  try {await cloudRequest('/api/auth/logout',{method:'POST'});} catch { /* Clear this browser session even if the upstream logout fails. */ }
-  cloudUser=null;drafts={};noticeStates.clear();PROJECTS=structuredClone(INITIAL_PROJECTS);applications=structuredClone(INITIAL_APPLICATIONS);
+  try {await signOutSupabase();} catch { /* Clear this browser session even if the upstream logout fails. */ }
+  cloudUser=null;drafts={};noticeStates.clear();EMPLOYEES=structuredClone(INITIAL_EMPLOYEES);sheetSync=null;sheetSourceStatus.spreadsheetId=null;
+  PROJECTS=structuredClone(INITIAL_PROJECTS);applications=structuredClone(INITIAL_APPLICATIONS);
   applicationEvents=[];records=structuredClone(INITIAL_RECORDS);TICKETS=structuredClone(INITIAL_TICKETS);completed={};
   operatorVersion=0;operatorOwnerId=null;operatorDirty=false;operatorConflict=null;operatorSaveStatus='local';
   for(const timer of cloudTimers.values())clearTimeout(timer);
@@ -523,7 +555,7 @@ async function uploadNoticeFile(t,file) {
 async function refreshCloudDraft(t) {
   if(!cloudUser||!drafts[t.id])return;
   try {
-    const remote=await cloudRequest(`/api/drafts/${encodeURIComponent(t.id)}`);
+    const remote=await readDraft(t.id);
     const d=getDraft(t);
     if(remote.version===d._cloudVersion)return;
     if(d._cloudDirty)setCloudState(t,'conflict',{remote});
@@ -669,7 +701,7 @@ function historyRows(list) {
 }
 const recordKind = r => r.kind || (/D-\d|리마인드|마감 전|추가 안내|한 번 더/.test(`${r.title} ${getTicket(r.ticket)?.title||''}`)?'reminder':'initial');
 function rosterMarkup(p,s) {
-  return `<section class="panel roster-panel"><div class="panel-heading"><div><h2>대상자별 신청 상태</h2><p class="caption muted">${p.dataKind==='sheet'?'마지막 시트 가져오기':'최근 확인'} ${s.lastCheckedAt?escapeHtml(s.lastCheckedAt.replace('T',' ')):'없음'} · ${p.confirmationMode==='separate'?'별도 승인 후 확정':'신청 즉시 확정'}</p>${p.dataKind==='sheet'?`<p class="caption muted">시트는 자동 갱신되지 않습니다. 여기서 바꾼 상태는 Supabase에 저장되며 시트에는 기록되지 않습니다.</p>`:''}</div>${p.dataKind==='sheet'?`<button class="button compact" data-action="sync-sheet" ${sheetSyncBusy||!sheetSourceStatus.configured||!cloudUser?'disabled':''}>${sheetSyncBusy?'가져오는 중…':'시트 다시 가져오기'}</button>`:''}</div>${p.confirmationMode==='immediate'&&s.appliedIds.length>s.confirmedIds.length?'<p class="error-message">신청 즉시 확정 프로젝트에 확정 대기 기록이 있습니다. 시트의 신청 상태를 확인하거나 아래에서 확정 처리해주세요.</p>':''}<div class="roster-filters"><div class="field"><label for="roster-search">이름·팀 검색</label><input id="roster-search" type="search" placeholder="이름 또는 팀" value="${escapeHtml(rosterSearch)}"></div><div class="field"><label for="roster-filter">신청 상태</label><select id="roster-filter">${[['all','전체'],['pending','미신청'],['required','필수 · 미신청'],['applied','신청 완료'],['waiting','확정 대기']].map(([value,label])=>`<option value="${value}" ${rosterFilter===value?'selected':''}>${label}</option>`).join('')}</select></div><span id="roster-count" class="caption muted" role="status"></span></div>${s.unknown.length?`<p class="error-message">대상을 확인할 수 없는 기록 ${s.unknown.length}건은 집계에서 제외했습니다.</p>`:''}<div class="roster-list">${s.targetIds.map(employeeId=>{const e=EMPLOYEES.find(item=>item.id===employeeId),applied=s.appliedIds.includes(employeeId),confirmed=s.confirmedIds.includes(employeeId),required=s.requiredIds.includes(employeeId),team=TEAMS.find(t=>t.id===e.team).name;return `<div class="roster-row" data-roster-row data-search="${escapeHtml(e.name+' '+team)}" data-applied="${applied}" data-confirmed="${confirmed}" data-required="${required}"><div><strong>${escapeHtml(e.name)}</strong><small>${escapeHtml(team)}${required?' · 필수 대상':''}</small></div>${tag(confirmed?'확정':applied?'확정 대기':'미신청',confirmed?'green':applied?'gray':'orange')}<div class="actions">${!applied?`<button class="button compact" data-application="applied" data-employee="${employeeId}" data-project="${p.id}" aria-label="${escapeHtml(e.name)} 신청 처리">신청 처리</button>`:`${!confirmed?`<button class="button compact" data-application="confirmed" data-employee="${employeeId}" data-project="${p.id}" aria-label="${escapeHtml(e.name)} 확정 처리">확정 처리</button>`:''}<button class="button compact" data-application="cancelled" data-employee="${employeeId}" data-project="${p.id}" aria-label="${escapeHtml(e.name)} 신청 취소">신청 취소</button>`}</div></div>`;}).join('')}</div><p id="roster-empty" class="empty" hidden>조건에 맞는 동료가 없습니다.</p>${applicationLog(p.id)}</section>`;
+  return `<section class="panel roster-panel"><div class="panel-heading"><div><h2>대상자별 신청 상태</h2><p class="caption muted">${p.dataKind==='sheet'?'마지막 시트 가져오기':'최근 확인'} ${s.lastCheckedAt?escapeHtml(s.lastCheckedAt.replace('T',' ')):'없음'} · ${p.confirmationMode==='separate'?'별도 승인 후 확정':'신청 즉시 확정'}</p>${p.dataKind==='sheet'?`<p class="caption muted">마지막으로 Supabase에 저장된 시트 현황입니다. 여기서 바꾼 상태는 Supabase에 저장되며 시트에는 기록되지 않습니다.</p>`:''}</div>${p.dataKind==='sheet'?`<button class="button compact" data-action="sync-sheet" ${sheetSyncBusy||!sheetSourceStatus.configured||!cloudUser?'disabled':''}>${sheetSyncBusy?'가져오는 중…':'시트 다시 가져오기'}</button>`:''}</div>${p.confirmationMode==='immediate'&&s.appliedIds.length>s.confirmedIds.length?'<p class="error-message">신청 즉시 확정 프로젝트에 확정 대기 기록이 있습니다. 시트의 신청 상태를 확인하거나 아래에서 확정 처리해주세요.</p>':''}<div class="roster-filters"><div class="field"><label for="roster-search">이름·팀 검색</label><input id="roster-search" type="search" placeholder="이름 또는 팀" value="${escapeHtml(rosterSearch)}"></div><div class="field"><label for="roster-filter">신청 상태</label><select id="roster-filter">${[['all','전체'],['pending','미신청'],['required','필수 · 미신청'],['applied','신청 완료'],['waiting','확정 대기']].map(([value,label])=>`<option value="${value}" ${rosterFilter===value?'selected':''}>${label}</option>`).join('')}</select></div><span id="roster-count" class="caption muted" role="status"></span></div>${s.unknown.length?`<p class="error-message">대상을 확인할 수 없는 기록 ${s.unknown.length}건은 집계에서 제외했습니다.</p>`:''}<div class="roster-list">${s.targetIds.map(employeeId=>{const e=EMPLOYEES.find(item=>item.id===employeeId),applied=s.appliedIds.includes(employeeId),confirmed=s.confirmedIds.includes(employeeId),required=s.requiredIds.includes(employeeId),team=TEAMS.find(t=>t.id===e.team).name;return `<div class="roster-row" data-roster-row data-search="${escapeHtml(e.name+' '+team)}" data-applied="${applied}" data-confirmed="${confirmed}" data-required="${required}"><div><strong>${escapeHtml(e.name)}</strong><small>${escapeHtml(team)}${required?' · 필수 대상':''}</small></div>${tag(confirmed?'확정':applied?'확정 대기':'미신청',confirmed?'green':applied?'gray':'orange')}<div class="actions">${!applied?`<button class="button compact" data-application="applied" data-employee="${employeeId}" data-project="${p.id}" aria-label="${escapeHtml(e.name)} 신청 처리">신청 처리</button>`:`${!confirmed?`<button class="button compact" data-application="confirmed" data-employee="${employeeId}" data-project="${p.id}" aria-label="${escapeHtml(e.name)} 확정 처리">확정 처리</button>`:''}<button class="button compact" data-application="cancelled" data-employee="${employeeId}" data-project="${p.id}" aria-label="${escapeHtml(e.name)} 신청 취소">신청 취소</button>`}</div></div>`;}).join('')}</div><p id="roster-empty" class="empty" hidden>조건에 맞는 동료가 없습니다.</p>${applicationLog(p.id)}</section>`;
 }
 function filterRoster() {
   if(!$('#roster-count'))return;
@@ -773,11 +805,11 @@ function recipientTable(list,p) {
 function sheetReviewReminder(p) {
   if(p.dataKind!=='sheet')return '';
   const last=sheetSync?.lastSuccessAt?new Date(sheetSync.lastSuccessAt).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}):null;
-  return `<section class="panel sheet-source-panel" aria-label="신청 현황 확인"><div><h2>발송 전 신청 현황을 확인해주세요</h2><p class="caption muted">신청 현황은 정기적으로 자동 갱신되지 않습니다. 마지막 가져오기: ${last?escapeHtml(last):'아직 가져오지 않음'}</p><p class="caption muted">새로고침 후 본문과 받는 대상을 다시 확인해주세요. 보내기 직전에도 시트 원본을 다시 조회합니다.</p>${!cloudUser?'<p class="caption muted">시트를 읽으려면 먼저 로그인해주세요.</p>':''}${sheetSyncError?`<p class="error-message" role="alert">${escapeHtml(sheetSyncError)}</p>`:''}</div><button type="button" class="button" data-action="sync-sheet" ${sheetSyncBusy||!sheetSourceStatus.configured||!cloudUser?'disabled':''}>${sheetSyncBusy?'가져오는 중…':'신청 현황 새로고침'}</button></section>`;
+  return `<section class="panel sheet-source-panel" aria-label="신청 현황 확인"><div><h2>발송 전 신청 현황을 확인해주세요</h2><p class="caption muted">Supabase의 마지막 성공한 동기화 시각: ${last?escapeHtml(last):'아직 가져오지 않음'}</p><p class="caption muted">보내기 직전에도 시트 원본을 다시 확인하고, 변경됐다면 본문과 대상을 다시 검토하도록 멈춥니다.</p>${!cloudUser?'<p class="caption muted">시트를 읽으려면 먼저 로그인해주세요.</p>':''}${sheetSyncError?`<p class="error-message" role="alert">${escapeHtml(sheetSyncError)}</p>`:''}</div><button type="button" class="button" data-action="sync-sheet" ${sheetSyncBusy||!sheetSourceStatus.configured||!cloudUser?'disabled':''}>${sheetSyncBusy?'가져오는 중…':'신청 현황 새로고침'}</button></section>`;
 }
 function reviewPage(id) {
   const t=getTicket(id),p=getProject(t.project),d=getDraft(t);
-  const resources=(d.resources||[]).map((item,index)=>`<div class="draft-resource"><span>${item.kind==='file'?'📎':'🔗'} ${escapeHtml(item.label)}${item.kind==='file'?` · ${Math.ceil((item.byte_size||0)/1024)} KB`:''}</span>${item.kind==='file'&&cloudUser?`<a class="button compact" href="/api/files/${encodeURIComponent(item.id)}" target="_blank" rel="noopener noreferrer">열기</a>`:''}<button class="button compact" data-remove-resource="${index}">제거</button></div>`).join('')||'<p class="help">이번 안내에 추가한 자료가 없어요.</p>';
+  const resources=(d.resources||[]).map((item,index)=>`<div class="draft-resource"><span>${item.kind==='file'?'📎':'🔗'} ${escapeHtml(item.label)}${item.kind==='file'?` · ${Math.ceil((item.byte_size||0)/1024)} KB`:''}</span>${item.kind==='file'&&cloudUser?`<a class="button compact" href="#" data-open-file="${encodeURIComponent(item.id)}">열기</a>`:''}<button class="button compact" data-remove-resource="${index}">제거</button></div>`).join('')||'<p class="help">이번 안내에 추가한 자료가 없어요.</p>';
   return `<a href="#project/${p.id}" class="back-link">${icon('back')} ${p.name} 전체 티켓</a>${heading('보낼 내용 확인',`${p.name} · ${t.title}`)}${sheetReviewReminder(p)}${noticeCardMarkup(d)}<div class="review-grid"><section class="panel form-panel"><h2>동료에게 보낼 메시지</h2><p class="caption muted" style="margin:7px 0 22px">정보 카드로 생성한 초안을 확인하고 다듬어주세요.</p><div class="draft-save-box" role="status" aria-live="polite"><span id="draft-save-state">${escapeHtml(cloudLabel(t))}</span><button class="button compact" id="draft-retry" data-action="retry-draft-save" ${cloudState[t.id]?.status==='error'?'':'hidden'}>다시 시도</button><span id="draft-conflict-actions" class="actions" ${cloudState[t.id]?.status==='conflict'?'':'hidden'}><button class="button compact" data-action="load-cloud-draft">서버 내용 불러오기</button><button class="button compact" data-action="overwrite-cloud-draft">내 변경 저장</button></span></div><div class="field"><label for="draft-tone">말투</label><select id="draft-tone"><option value="friendly" ${d.tone==='friendly'?'selected':''}>친근하고 밝게</option><option value="concise" ${d.tone==='concise'?'selected':''}>친근하고 간결하게</option><option value="action" ${d.tone==='action'?'selected':''}>신청 요청을 명확하게</option></select><p class="help">말투를 바꾸면 확인된 정보 카드로 Gemini가 본문을 다시 작성합니다. 직접 수정한 내용은 교체돼요.</p></div><div class="draft-area"><label class="preview-label" for="draft-body"><span>메시지 본문</span>${tag(d.generatedModel?'Gemini 초안':'직접 작성')}</label><textarea id="draft-body" maxlength="20000">${escapeHtml(d.body)}</textarea><p class="help">신청 링크와 날짜가 맞는지 보내기 전에 확인해주세요.</p></div><div class="draft-attachments"><h3>이번 안내에 포함할 자료</h3><p class="help">링크는 본문에 넣고, 파일은 로그인한 계정의 비공개 저장소에 저장해요. 실제 Slack 전송은 아직 연결되지 않았어요.</p><div id="draft-resources">${resources}</div><div class="resource-add"><input id="resource-label" type="text" maxlength="160" aria-label="링크 이름" placeholder="링크 이름"><input id="resource-url" type="url" maxlength="2000" aria-label="링크 주소" placeholder="https://…"><button class="button" data-action="add-resource-link">링크 추가</button></div><div class="field"><label for="resource-file">파일 첨부 (PDF·DOCX·TXT·MD·이미지, 4MB 이하)</label><input id="resource-file" type="file" accept=".pdf,.docx,.txt,.md,.png,.jpg,.jpeg" ${cloudUser?'':'disabled'}></div>${cloudUser?'':'<p class="help">파일을 저장하려면 상단의 Supabase 로그인을 완료해주세요.</p>'}</div></section><section class="panel form-panel"><h2 style="margin-bottom:22px">보내는 방법과 대상</h2><div id="recipient-settings">${recipientSettings(t)}</div></section></div><div class="approval-bar"><div><label class="confirm-row"><input type="checkbox" id="send-confirm" ${d.confirmed?'checked':''}><span id="confirmation-label">${confirmationLabel(d)}</span></label><p>체크하면 최종 본문과 대상을 확인하는 창이 열립니다.</p>${sendPreflightErrors.has(t.id)?`<p class="error-message" role="alert">${escapeHtml(sendPreflightErrors.get(t.id))}</p>`:''}</div><button class="button primary" id="send-button" data-action="simulate-send" ${canSend(t)?'':'disabled'}>${sendLabel(t)} ${icon('arrow')}</button></div>`;
 }
 const confirmationLabel = d => d.mode==='dm'?'보낼 내용과 DM을 받을 동료를 확인했어요.':'보낼 내용과 게시할 채널·공개 범위를 확인했어요.';
@@ -838,7 +870,7 @@ function renderHistoryDialog() {
   $('#history-form .dialog-body').insertAdjacentHTML('afterbegin',`<div class="field"><label for="history-kind">안내 종류</label><select id="history-kind"><option value="initial" ${recordKind(r)==='initial'?'selected':''}>최초 공지</option><option value="reminder" ${recordKind(r)==='reminder'?'selected':''}>리마인드 알림</option></select></div>`);
   if(r.sourceCheckedAt&&!Number.isNaN(Date.parse(r.sourceCheckedAt)))$('#history-kind').closest('.field').insertAdjacentHTML('afterend',`<p class="help">${r.sourceRechecked?'모의 발송 직전 Sheets 확인':'마지막 신청 현황 확인'}: ${escapeHtml(new Date(r.sourceCheckedAt).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}))}</p>`);
   const resources=(r.resources||[]).map(item=>{
-    const link=item.kind==='link'&&/^https:\/\//i.test(item.url||'')?`<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">링크 열기</a>`:item.kind==='file'&&/^[a-f0-9-]{36}$/i.test(item.id||'')&&cloudUser?`<a href="/api/files/${escapeHtml(item.id)}" target="_blank" rel="noopener noreferrer">파일 열기</a>`:'';
+    const link=item.kind==='link'&&/^https:\/\//i.test(item.url||'')?`<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">링크 열기</a>`:item.kind==='file'&&/^[a-f0-9-]{36}$/i.test(item.id||'')&&cloudUser?`<a href="#" data-open-file="${escapeHtml(item.id)}">파일 열기</a>`:'';
     return `<div class="draft-resource"><span>${item.kind==='file'?'첨부 파일':'본문 링크'} · ${escapeHtml(item.label)}</span>${link}</div>`;
   }).join('');
   $('#history-url').closest('.field').insertAdjacentHTML('beforebegin',`<div class="history-resources"><h3>당시 포함한 자료</h3>${resources||'<p class="help">별도로 기록된 자료가 없어요.</p>'}</div>`);
@@ -956,17 +988,19 @@ async function simulateSend(t) {
   sendPreflightBusy=true;sendPreflightErrors.delete(t.id);
   const button=$('#send-button');if(button){button.disabled=true;button.textContent='최신 신청 현황 확인 중…';}
   try{
-    const remote=await cloudRequest(`/api/drafts/${encodeURIComponent(t.id)}`);
+    const remote=await readDraft(t.id);
     if(remote.version!==d._cloudVersion){setCloudState(t,'conflict',{remote});throw new Error('다른 탭에서 초안이 바뀌었어요. 다시 확인해주세요.');}
     let sourceCheckedAt=getProject(t.project).lastCheckedAt||null;
     if(getProject(t.project).dataKind==='sheet'){
       if(!approvedSource)throw new Error('승인 당시 신청 현황이 없습니다. 본문과 대상을 다시 확인해주세요.');
-      const source=await cloudRequest('/api/sheets/sync',{method:'POST'});
+      await supabaseRequest('/functions/v1/sync-sheets',{method:'POST'});
+      const source=(await readSheetSnapshot())?.payload;
+      if(!source)throw new Error('최신 시트 현황을 Supabase에서 읽지 못했습니다.');
       if(!approvedSpreadsheetId||source.spreadsheetId!==approvedSpreadsheetId)throw new Error('승인할 때 사용한 Google Sheets 원본과 현재 원본이 다릅니다. 다시 확인해주세요.');
       const latest=sheetSendSnapshot(source,t.project,new Map(TEAMS.map(team=>[team.name,team.id])),applicationEvents.filter(event=>event.projectId===t.project&&event.source!=='sheet'&&!String(event.id).startsWith('sheet:')));
       if(latest!==approvedSource){
         d.confirmed=false;d.confirmedSignature='';d.confirmedSourceSnapshot='';d.confirmedSpreadsheetId='';
-        applySheetSource(source);
+        applySheetSource(source,{remote:false});
         throw new Error('신청 상태 또는 대상 명단이 바뀌었습니다. 최신 현황을 반영했으니 수신자를 다시 확인해주세요.');
       }
       if(projectSendSnapshot(getProject(t.project),EMPLOYEES,applications)!==approvedSource)throw new Error('화면의 신청 현황이 승인 이후 바뀌었습니다. 다시 확인해주세요.');
@@ -990,6 +1024,14 @@ async function simulateSend(t) {
 }
 
 document.addEventListener('click',event=>{
+  const fileLink=event.target.closest('[data-open-file]');
+  if(fileLink){
+    event.preventDefault();
+    const tab=window.open('about:blank','_blank');
+    void createFileUrl(fileLink.dataset.openFile).then(url=>{if(tab)tab.location.href=url;else window.location.href=url;})
+      .catch(error=>{tab?.close();toast(error.message);});
+    return;
+  }
   if(event.target.closest('.skip-link')){event.preventDefault();$('#content').focus();return;}
   if(event.target.closest('#cloud-open')){openCloudDialog();return;}
   if(event.target.id==='send-confirm'){event.preventDefault();const r=route();if(r.view==='review')openSendPreview(getTicket(r.id));return;}
@@ -1137,5 +1179,6 @@ window.addEventListener('hashchange',()=>{
   if($('#history-dialog').open)closeHistory();if($('#cancel-dialog').open)closeCancel();if($('#send-preview-dialog').open)closeSendPreview();activeTab='tickets';rosterSearch='';rosterFilter='all';recipientPage=0;recipientSearch='';resetArmed=false;projectFormError='';appliedDocumentName='';appliedFieldReviews={};appliedSourceIssues=null;
   render();window.scrollTo({top:0,behavior:'instant'});$('#content').focus({preventScroll:true});
 });
-window.addEventListener('focus',()=>{void refreshOperatorState();const r=route();if(r.view==='review')refreshCloudDraft(getTicket(r.id));});
+window.addEventListener('focus',()=>{void refreshOperatorState().then(()=>refreshAutomatedSheetState()).catch(()=>{});const r=route();if(r.view==='review')refreshCloudDraft(getTicket(r.id));});
+setInterval(()=>{if(cloudUser&&!operatorDirty&&route().view!=='edit-project')void refreshAutomatedSheetState().catch(error=>{sheetSyncError=error.message;});},5*60*1000);
 restore();render();initializeCloud();void initializeSheetSource();
