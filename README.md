@@ -82,7 +82,7 @@ npm run dev
 3. Supabase를 사용할 경우 Vercel 프로젝트의 **Settings → Environment Variables**에 `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`를 Preview와 Production 환경용으로 입력합니다. 운영자 Auth 계정으로 로그인할 수 있어야 합니다. Gemini 분석·초안에는 `GEMINI_API_KEY`와 `GEMINI_MODEL`을 설정합니다. 공휴일 조회에는 별도 키가 필요하지 않습니다. Node.js는 22.13 이상(권장 24)으로 실행하며 환경 변수 변경 후 새 배포를 생성합니다.
 4. Preview 배포에서 화면과 `/api/status`를 확인합니다. Supabase 설정을 했다면 `{ "configured": true }`가 나와야 합니다. 로그인, 초안 저장, 파일 업로드도 확인한 뒤 Production에 배포합니다.
 
-Vercel 함수의 요청·응답 크기 제한에 맞춰 첨부 파일은 4MB 이하입니다. 운영 정보 변경에는 로그인이 필요하지만 읽기 화면의 예시 데이터는 공개되어 있습니다. 실제 사내 자료를 넣기 전에 사이트 전체의 접근 제어를 설정해야 합니다.
+안내 첨부 파일은 브라우저에서 Supabase의 비공개 `notice-files` 버킷으로 직접 업로드하며, 파일 이름·크기·해시는 `notice_resources`에 저장합니다. 화면에서는 4MB 이하만 허용하고 버킷에도 파일 크기·형식 제한이 있습니다. 운영 정보 변경에는 로그인이 필요하지만 읽기 화면의 예시 데이터는 공개되어 있습니다. 실제 사내 자료를 넣기 전에 사이트 전체의 접근 제어를 설정해야 합니다.
 
 ## 문서
 
@@ -193,7 +193,8 @@ Vercel 함수의 요청·응답 크기 제한에 맞춰 첨부 파일은 4MB 이
 
 `codex/supabase-scheduled-sync`에서는 웹앱이 Supabase Auth에 직접 로그인하고,
 `operator_states`, `notice_drafts`, `sheet_sync_snapshots`, `automation_tickets`를
-사용자 JWT와 RLS로 직접 읽습니다. Vercel API는 Gemini 분석·생성 및 안내 파일 업로드에만
+사용자 JWT와 RLS로 직접 읽습니다. 안내 파일도 사용자 JWT로 Supabase Storage에
+직접 올리고 `notice_resources`에 기록합니다. Vercel API는 Gemini 분석·생성에
 사용하며, 이 요청에도 같은 사용자 JWT를 보냅니다. 공개 가능한 publishable key와
 Supabase URL은 `/api/status`가 전달합니다. 비밀번호와 service role key는 웹앱에 저장하지 않습니다.
 

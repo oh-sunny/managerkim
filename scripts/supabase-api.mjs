@@ -1,9 +1,6 @@
-import { createHash, randomUUID } from 'node:crypto';
 import {BRIEF_FIELDS} from './notice-generation.mjs';
 
-const MIME = {pdf:'application/pdf',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',txt:'text/plain',md:'text/markdown',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg'};
 const MAX_JSON = 120_000;
-const MAX_FILE = 4_000_000;
 const draftIdOk = id => /^[a-z0-9-]{1,100}$/i.test(id);
 const json = (res,status,value) => {
   const body=Buffer.from(JSON.stringify(value));
@@ -225,38 +222,6 @@ export function createSupabaseApi({url='',key='',fetcher=fetch,analyzer=null,not
           }
           json(res,response.ok?200:502,response.ok?result:{error:'Supabase에 초안을 저장하지 못했습니다.'});return;
         }
-      }
-      if(pathname==='/api/files' && req.method==='POST'){
-        let name='';try{name=decodeURIComponent(String(req.headers['x-file-name']||''));}catch{}
-        name=name.replace(/[\\/\x00-\x1f]/g,'').trim();
-        const ext=name.toLowerCase().split('.').pop();
-        if(!name||name.length>160||!MIME[ext]){json(res,400,{error:'PDF, DOCX, TXT, MD, PNG, JPG 파일만 저장할 수 있습니다.'});return;}
-        const file=await bytes(req,MAX_FILE);
-        if(!file.length){json(res,400,{error:'빈 파일은 저장할 수 없습니다.'});return;}
-        const id=randomUUID(),storagePath=`${auth.user.id}/${id}`;
-        const uploaded=await upstream(`/storage/v1/object/notice-files/${storagePath}`,{
-          method:'POST',headers:{'Content-Type':MIME[ext],'x-upsert':'false'},body:file,
-        },auth.token);
-        if(!uploaded.ok){json(res,502,{error:'Supabase Storage에 파일을 저장하지 못했습니다.'});return;}
-        const row={id,owner_id:auth.user.id,kind:'file',label:name,storage_path:storagePath,original_filename:name,mime_type:MIME[ext],byte_size:file.length,sha256:createHash('sha256').update(file).digest('hex')};
-        const created=await upstream('/rest/v1/notice_resources',{method:'POST',headers:{'Content-Type':'application/json','Prefer':'return=representation'},body:JSON.stringify(row)},auth.token);
-        if(!created.ok){
-          await upstream(`/storage/v1/object/notice-files/${storagePath}`,{method:'DELETE'},auth.token).catch(()=>{});
-          json(res,502,{error:'파일 메타데이터를 저장하지 못했습니다.'});return;
-        }
-        json(res,201,{resource:(await readUpstream(created))[0]});return;
-      }
-      const fileMatch=pathname.match(/^\/api\/files\/([a-f0-9-]{36})$/i);
-      if(fileMatch && req.method==='GET'){
-        const response=await upstream(`/rest/v1/notice_resources?id=eq.${fileMatch[1]}&kind=eq.file&select=id,storage_path,original_filename,mime_type&limit=1`,{},auth.token);
-        if(!response.ok){json(res,502,{error:'파일 정보를 읽지 못했습니다.'});return;}
-        const resource=(await readUpstream(response))[0];
-        if(!resource){json(res,404,{error:'파일이 없습니다.'});return;}
-        const downloaded=await upstream(`/storage/v1/object/authenticated/notice-files/${resource.storage_path}`,{},auth.token);
-        if(!downloaded.ok){json(res,502,{error:'파일을 읽지 못했습니다.'});return;}
-        const data=Buffer.from(await downloaded.arrayBuffer());
-        res.writeHead(200,{'Content-Type':resource.mime_type,'Content-Length':data.length,'Content-Disposition':`attachment; filename*=UTF-8''${encodeURIComponent(resource.original_filename)}`,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
-        res.end(data);return;
       }
       json(res,404,{error:'요청한 API가 없습니다.'});
     } catch(error){

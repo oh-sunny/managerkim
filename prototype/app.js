@@ -6,7 +6,7 @@ import {NOTICE_PURPOSES,BRIEF_LABELS,makeNoticeBrief,generationSignature,acceptN
 import {projectSendSnapshot,sheetSendSnapshot} from './send-preflight.js';
 import {mergeSheetApplications} from './sheet-application-merge.js';
 import {quickRecipientSelection,recipientGroups,recipientCounts,recipientGroupLabel} from './recipient-selection.js';
-import {configureSupabase,restoreSupabaseUser,signInSupabase,signOutSupabase,accessToken,supabaseRequest,readOperatorState,saveOperatorState as saveStateDirect,readSheetSnapshot,readAutomationTickets,readDrafts,readDraft,saveDraft,createFileUrl} from './supabase-browser.js';
+import {configureSupabase,restoreSupabaseUser,signInSupabase,signOutSupabase,accessToken,supabaseRequest,readOperatorState,saveOperatorState as saveStateDirect,readSheetSnapshot,readAutomationTickets,readDrafts,readDraft,saveDraft,createFileUrl,uploadNoticeResource} from './supabase-browser.js';
 const $ = selector => document.querySelector(selector);
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const icons = {
@@ -544,10 +544,9 @@ async function logoutCloud() {
 }
 async function uploadNoticeFile(t,file) {
   if(!cloudUser){toast('저장 설정에서 로그인해주세요.');return;}
-  if(file.size>4_000_000){toast('4MB 이하 파일을 선택해주세요.');return;}
   setCloudState(t,'saving');
   try {
-    const resource=(await cloudRequest('/api/files',{method:'POST',body:file,headers:{'x-file-name':encodeURIComponent(file.name)}})).resource;
+    const resource=await uploadNoticeResource(file,cloudUser.id);
     const d=getDraft(t);d.resources=[...(d.resources||[]),{kind:'file',id:resource.id,label:resource.label,byte_size:resource.byte_size,mime_type:resource.mime_type,sha256:resource.sha256,version:resource.version}];
     d.confirmed=false;render();updateApproval(t);toast('파일을 비공개 저장소에 저장했어요.');
   } catch(error){setCloudState(t,'error');toast(error.message);}

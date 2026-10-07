@@ -144,23 +144,6 @@ test('operational state save uses versioned RPC and exposes conflict without ove
   assert.deepEqual(JSON.parse(calls.find(row=>row.url.endsWith('/rest/v1/rpc/save_operator_state')).options.body),{p_expected_version:2,p_payload:payload});
 });
 
-test('authenticated file upload stores bytes privately and records its hash',async()=>{
-  const calls=[];
-  const handler=createSupabaseApi({...config,fetcher:async(url,options)=>{
-    calls.push({url,options});
-    if(url.endsWith('/auth/v1/user'))return response({id:'11111111-1111-1111-1111-111111111111',email:'operator@example.org'});
-    if(url.includes('/storage/v1/object/notice-files/'))return response({Key:'stored'},200);
-    if(url.endsWith('/rest/v1/notice_resources'))return response([{id:JSON.parse(options.body).id,label:'guide.txt',byte_size:5,sha256:JSON.parse(options.body).sha256,version:1}],201);
-    throw new Error('Unexpected upstream call');
-  }});
-  const result=await call(handler,'/api/files',{method:'POST',body:'hello',headers:{...cookie,'x-file-name':'guide.txt'}});
-  assert.equal(result.status,201);
-  assert.equal(result.body.resource.byte_size,5);
-  const storage=calls.find(item=>item.url.includes('/storage/v1/object/notice-files/'));
-  assert.equal(Buffer.from(storage.options.body).toString(),'hello');
-  assert.match(calls.find(item=>item.url.endsWith('/rest/v1/notice_resources')).options.body,/2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824/);
-});
-
 test('document analysis is authenticated, same-origin, size-limited and passes no credentials to the model',async()=>{
   let analyzed=0;
   const analyzer={configured:true,analyze:async input=>{analyzed++;assert.deepEqual(input,{files:[],text:'행사명: 샘플',forceOcr:false});return {fields:[],sources:[]};}};

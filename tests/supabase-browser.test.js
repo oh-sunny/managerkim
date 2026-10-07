@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {configureSupabase,signInSupabase,signOutSupabase,readOperatorState} from '../prototype/supabase-browser.js';
+import {configureSupabase,signInSupabase,signOutSupabase,readOperatorState,uploadNoticeResource} from '../prototype/supabase-browser.js';
 
 test('browser login reads operator state directly from Supabase with the user token', async t => {
   const previousFetch=globalThis.fetch,previousStorage=globalThis.sessionStorage;
@@ -26,4 +26,56 @@ test('browser login reads operator state directly from Supabase with the user to
   assert.equal(read.options.headers.apikey,'sb_publishable_public');
   await signOutSupabase();
   assert.equal(values.size,0);
+});
+
+test('browser uploads notice file directly to private Supabase Storage and records metadata', async t => {
+  const previousFetch=globalThis.fetch,previousStorage=globalThis.sessionStorage;
+  const values=new Map(),calls=[];
+  globalThis.sessionStorage={getItem:key=>values.get(key)||null,setItem:(key,value)=>values.set(key,value),removeItem:key=>values.delete(key)};
+  t.after(()=>{globalThis.fetch=previousFetch;globalThis.sessionStorage=previousStorage;});
+  const ownerId='11111111-1111-1111-1111-111111111111';
+  globalThis.fetch=async (url,options) => {
+    calls.push({url:String(url),options});
+    if(String(url).includes('/auth/v1/token?grant_type=password'))return Response.json({access_token:'user-access',refresh_token:'user-refresh',expires_at:Math.floor(Date.now()/1000)+3600,user:{id:ownerId,email:'operator@example.com'}});
+    if(String(url).includes('/storage/v1/object/notice-files/'))return Response.json({Key:'stored'});
+    if(String(url).endsWith('/rest/v1/notice_resources'))return Response.json([JSON.parse(options.body)],{status:201});
+    return new Response(null,{status:404});
+  };
+  configureSupabase({supabaseUrl:'https://example.supabase.co',publishableKey:'sb_publishable_public'});
+  await signInSupabase('operator@example.com','password');
+  const file=new Blob(['hello'],{type:'text/plain'});
+  Object.defineProperty(file,'name',{value:'guide.txt'});
+  const resource=await uploadNoticeResource(file,ownerId);
+  assert.equal(resource.label,'guide.txt');
+  assert.equal(resource.sha256,'2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824');
+  const storage=calls.find(call=>call.url.includes('/storage/v1/object/notice-files/'));
+  assert.equal(storage.options.headers.Authorization,'Bearer user-access');
+  assert.equal(storage.options.headers['Content-Type'],'text/plain');
+  assert.equal(await storage.options.body.text(),'hello');
+  assert.match(storage.url,/notice-files\/11111111-1111-1111-1111-111111111111\//);
+  const metadata=calls.find(call=>call.url.endsWith('/rest/v1/notice_resources'));
+  assert.equal(JSON.parse(metadata.options.body).storage_path,resource.storage_path);
+  assert.equal(metadata.options.headers.Prefer,'return=representation');
+  assert.ok(calls.every(call=>!call.url.includes('/api/files')));
+});
+
+test('browser removes an uploaded object when its metadata cannot be saved', async t => {
+  const previousFetch=globalThis.fetch,previousStorage=globalThis.sessionStorage;
+  const calls=[];
+  globalThis.sessionStorage={getItem:()=>null,setItem:()=>{},removeItem:()=>{}};
+  t.after(()=>{globalThis.fetch=previousFetch;globalThis.sessionStorage=previousStorage;});
+  const ownerId='11111111-1111-1111-1111-111111111111';
+  globalThis.fetch=async (url,options) => {
+    calls.push({url:String(url),options});
+    if(String(url).includes('/auth/v1/token?grant_type=password'))return Response.json({access_token:'user-access',refresh_token:'user-refresh',expires_at:Math.floor(Date.now()/1000)+3600,user:{id:ownerId,email:'operator@example.com'}});
+    if(String(url).endsWith('/rest/v1/notice_resources'))return Response.json({message:'database unavailable'},{status:503});
+    if(String(url).includes('/storage/v1/object/notice-files/'))return Response.json({Key:'stored'});
+    return new Response(null,{status:404});
+  };
+  configureSupabase({supabaseUrl:'https://example.supabase.co',publishableKey:'sb_publishable_public'});
+  await signInSupabase('operator@example.com','password');
+  const file=new Blob(['hello'],{type:'text/plain'});
+  Object.defineProperty(file,'name',{value:'guide.txt'});
+  await assert.rejects(uploadNoticeResource(file,ownerId),/database unavailable/);
+  assert.equal(calls.filter(call=>call.url.includes('/storage/v1/object/notice-files/')).map(call=>call.options.method).join(','),'POST,DELETE');
 });

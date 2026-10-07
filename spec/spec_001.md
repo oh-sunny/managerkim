@@ -215,14 +215,15 @@ DM 대신 채널에 공지를 게시하는 방식을 선택할 수 있습니다.
 | `prototype/message-templates.js` | 예시 템플릿과 자동 테스트용 문구. 현재 Gemini 생성 화면에서는 직접 사용하지 않음 |
 | `prototype/rule-engine.js` | 공휴일·신청 상태를 반영한 규칙 티켓 평가 |
 | `scripts/dev-server.mjs` | 로컬 화면과 Supabase API 제공, `.env` 읽기 |
-| `scripts/supabase-api.mjs` | Auth·운영 상태·Sheets 수동 조회·Gemini 분석/생성·초안·비공개 안내 파일 API |
+| `prototype/supabase-browser.js` | 브라우저 Supabase Auth·운영 상태·초안·비공개 안내 파일 직접 업로드/열람 |
+| `scripts/supabase-api.mjs` | 기존 Auth·운영 상태 호환 API, Sheets 수동 조회, Gemini 분석/생성 |
 | `scripts/google-sheets-service.mjs`, `scripts/google-sheets-source.mjs` | 서비스 계정 인증과 네 탭 읽기·정규화 |
 | `scripts/notice-generation.mjs` | 카드 기반 Gemini 초안 생성과 사실 검사 |
 | `supabase/migrations/20261006015431_notice_drafts_and_resources.sql` | 초안·자료 테이블과 접근 정책, 비공개 버킷 |
 | `supabase/migrations/20261006090000_operator_state.sql` | 계정별 운영 상태와 변경 스냅샷 |
 | `docs/references/` | 공지 말투 작성 참고 자료, 현재 앱에서 읽지 않음 |
 
-Node.js 22.13 이상에서 `npm ci` 후 프로젝트 폴더의 `npm run dev`로 실행합니다. 기본 주소는 `http://localhost:3000`이고, 환경 변수 `PORT`로 포트를 바꿀 수 있습니다. 로컬 서버와 Vercel 함수는 같은 Supabase Auth·운영 상태·초안·안내 파일·Google Sheets·Gemini API 모듈을 사용합니다. `.env`에 연결 값을 넣고 SQL 마이그레이션을 적용해야 서버 저장이 동작합니다. `npm test`로 계산과 API의 주요 경계를 검사합니다.
+Node.js 22.13 이상에서 `npm ci` 후 프로젝트 폴더의 `npm run dev`로 실행합니다. 기본 주소는 `http://localhost:3000`이고, 환경 변수 `PORT`로 포트를 바꿀 수 있습니다. 작업 브랜치의 웹앱은 Supabase Auth·운영 상태·초안과 비공개 안내 파일 저장/열람을 사용자 JWT로 직접 호출합니다. 로컬 서버와 Vercel 함수는 Gemini 분석·생성 등에 사용합니다. `.env`에 연결 값을 넣고 SQL 마이그레이션을 적용해야 서버 저장이 동작합니다. `npm test`로 계산과 API의 주요 경계를 검사합니다.
 
 ### 2026년 10월 6일 과거 작업 기록: Supabase 첫 연결
 

@@ -4,6 +4,8 @@ let base = '';
 let publishableKey = '';
 let session = null;
 let refreshing = null;
+const FILE_MIME = {pdf: 'application/pdf', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', txt: 'text/plain', md: 'text/markdown', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg'};
+const MAX_NOTICE_FILE = 4_000_000;
 
 const fail = async response => {
   const body = await response.json().catch(() => ({}));
@@ -78,8 +80,8 @@ export async function accessToken() {
 export async function supabaseRequest(path, {method = 'GET', body, headers = {}} = {}) {
   const send = async token => fetch(`${base}${path}`, {
     method,
-    headers: {apikey: publishableKey, Authorization: `Bearer ${token}`, ...(body === undefined ? {} : {'Content-Type': 'application/json'}), ...headers},
-    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: {apikey: publishableKey, Authorization: `Bearer ${token}`, ...(body === undefined ? {} : {'Content-Type': body instanceof Blob ? body.type : 'application/json'}), ...headers},
+    body: body === undefined ? undefined : body instanceof Blob ? body : JSON.stringify(body),
     cache: 'no-store',
   });
   let response = await send(await accessToken());
@@ -148,4 +150,33 @@ export async function createFileUrl(id) {
   const path = rows[0].storage_path.split('/').map(encodeURIComponent).join('/');
   const result = await supabaseRequest(`/storage/v1/object/sign/notice-files/${path}`, {method: 'POST', body: {expiresIn: 60}});
   return `${base}/storage/v1${result.signedURL}`;
+}
+
+export async function uploadNoticeResource(file, ownerId) {
+  const name = String(file?.name || '').replace(/[\\/\x00-\x1f]/g, '').trim();
+  const extension = name.toLowerCase().split('.').pop();
+  const mimeType = FILE_MIME[extension];
+  if (!name || name.length > 160 || !mimeType) throw new Error('PDF, DOCX, TXT, MD, PNG, JPG 파일만 저장할 수 있습니다.');
+  if (!file.size) throw new Error('빈 파일은 저장할 수 없습니다.');
+  if (file.size > MAX_NOTICE_FILE) throw new Error('4MB 이하 파일을 선택해주세요.');
+  if (!/^[0-9a-f-]{36}$/i.test(ownerId)) throw new Error('다시 로그인해주세요.');
+
+  const id = crypto.randomUUID();
+  const storagePath = `${ownerId}/${id}`;
+  const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+  const sha256 = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  const uploadPath = `/storage/v1/object/notice-files/${storagePath}`;
+  await supabaseRequest(uploadPath, {method: 'POST', body: file, headers: {'Content-Type': mimeType, 'x-upsert': 'false'}});
+  try {
+    const rows = await supabaseRequest('/rest/v1/notice_resources', {
+      method: 'POST',
+      body: {id, owner_id: ownerId, kind: 'file', label: name, storage_path: storagePath, original_filename: name, mime_type: mimeType, byte_size: file.size, sha256},
+      headers: {Prefer: 'return=representation'},
+    });
+    if (!rows?.[0]) throw new Error('파일 기록을 저장하지 못했습니다.');
+    return rows[0];
+  } catch (error) {
+    await supabaseRequest(uploadPath, {method: 'DELETE'}).catch(() => {});
+    throw error;
+  }
 }
