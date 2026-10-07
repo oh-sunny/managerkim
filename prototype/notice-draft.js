@@ -1,5 +1,13 @@
 export const NOTICE_PURPOSES = {initial:'첫 안내',reminder:'추가 신청 안내',deadline:'마감 알림'};
 
+export function noticePurposeForTicket(ticket,hasInitialRecord=false) {
+  const text=`${ticket.title||''} ${ticket.purpose||''}`;
+  if(ticket.kind==='initial'||ticket.purpose==='첫 안내')return 'initial';
+  if(['required','voluntary'].includes(ticket.kind))return ticket.triggers?.some(trigger=>trigger.startsWith('deadline-'))?'deadline':'reminder';
+  if(ticket.kind==='deadline'||/D-\d|마감|마지막/.test(text))return 'deadline';
+  return ticket.kind==='reminder'||/리마인드|다시|추가|한 번 더|필수 참여/.test(text)||hasInitialRecord?'reminder':'initial';
+}
+
 export const BRIEF_LABELS={what:'무엇을',audience:'대상',action:'해야 할 일',deadline:'마감',schedule:'언제·어디서',method:'신청 방법',cost:'비용·지원',exception:'예외·유의사항',contact:'문의',links:'링크·자료'};
 
 // These are the project facts used to prepare a notice. Keep the source values,

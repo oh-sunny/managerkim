@@ -55,6 +55,20 @@ test('Gemini receives only included confirmed facts and blocks invented links',a
   assert.throws(()=>validateNoticeInput({...input,card:{...card,action:{...card.action,included:false}}}),/해야 할 일/);
 });
 
+test('generated bold markers are removed before validation and the saved body stays plain text',async()=>{
+  const requests=[];
+  const generator=createNoticeGenerator({apiKey:'test',model:'gemini-3.7-flash',generate:async request=>{
+    requests.push(request);
+    return {text:requests.length===1
+      ? '**[대상]**\n건강검진 신청 안내\n**[해야 할 일]**\n검진기관을 선택해 신청하세요.\n**[신청 마감]**\n10월 16일 18:00까지\nhttps://example.org/apply'
+      : '{"supported":true,"issues":[]}'};
+  }});
+  const result=await generator.generate(input);
+  assert.match(requests[0].config.systemInstruction,/일반 텍스트/);
+  assert.equal(result.body,'[대상]\n건강검진 신청 안내\n[해야 할 일]\n검진기관을 선택해 신청하세요.\n[신청 마감]\n10월 16일 18:00까지\nhttps://example.org/apply');
+  assert.equal(JSON.parse(requests[1].contents[0].text).body,result.body);
+});
+
 test('document facts populate separate action, method, cost and exception cards with evidence',()=>{
   const evidence=[{sourceName:'검진안내.pdf',location:'2쪽',quote:'검진기관을 선택해 신청'}];
   const project={name:'건강검진',description:'직원 건강을 챙깁니다',audience:'전 직원',deadlineAt:'2026-10-16T18:00',requirements:'- 검진기관을 선택해 신청\n- 회사 지원금 10만 원\n- 마감 후 변경 불가',sourceReviews:[{field:'requirements',status:'found',evidence}],sourceIssues:[]};

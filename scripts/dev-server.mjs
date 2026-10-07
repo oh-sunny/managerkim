@@ -39,6 +39,7 @@ const assets = new Map([
   ['/document-import.css', ['document-import.css', 'text/css; charset=utf-8']],
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/supabase-browser.js', ['supabase-browser.js', 'text/javascript; charset=utf-8']],
+  ['/draft-storage-id.js', ['draft-storage-id.js', 'text/javascript; charset=utf-8']],
   ['/data.js', ['data.js', 'text/javascript; charset=utf-8']],
   ['/rule-engine.js', ['rule-engine.js', 'text/javascript; charset=utf-8']],
   ['/registration-summary.js', ['registration-summary.js', 'text/javascript; charset=utf-8']],

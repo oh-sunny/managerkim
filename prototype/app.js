@@ -3,7 +3,7 @@ import {calculateStatus, setApplication, applicationBreakdown, sortTicketsForDis
 import {mountDocumentImport} from './document-import.js';
 import {buildRegistrationSummary} from './registration-summary.js';
 import {evaluateFirstNoticeTicket,evaluateReminderCheckpoints,evaluateReminderTickets} from './rule-engine.js';
-import {NOTICE_PURPOSES,BRIEF_LABELS,makeNoticeBrief,prepareNoticeDraft,restoreNoticeDraft,compareDraftProject,acceptProjectReview,generationSignature,acceptNoticeCandidate} from './notice-draft.js';
+import {NOTICE_PURPOSES,BRIEF_LABELS,makeNoticeBrief,prepareNoticeDraft,restoreNoticeDraft,compareDraftProject,acceptProjectReview,generationSignature,acceptNoticeCandidate,noticePurposeForTicket} from './notice-draft.js';
 import {makeNoticeResource,latestProjectResources,snapshotSimulatedNotice} from './notice-resources.js';
 import {prepareNoticeGeneration,NOTICE_TONE_LABELS} from './notice-generation-input.js';
 import {projectSendSnapshot,sheetSendSnapshot} from './send-preflight.js';
@@ -13,6 +13,7 @@ import {newProjectId} from './project-id.js';
 import {quickRecipientSelection,recipientGroups,recipientCounts,recipientGroupLabel} from './recipient-selection.js';
 import {mergeOperatorPayload} from './operator-merge.js';
 import {configureSupabase,restoreSupabaseUser,signInSupabase,signOutSupabase,accessToken,supabaseRequest,readOperatorState,saveOperatorState as saveStateDirect,readSheetSnapshot,readLatestSheetSyncRun,readAutomationTickets,readDrafts,readDraft,saveDraft,createFileUrl,uploadNoticeResource} from './supabase-browser.js';
+import {draftStorageId} from './draft-storage-id.js';
 const $ = selector => document.querySelector(selector);
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const icons = {
@@ -130,6 +131,7 @@ const status = p => calculateStatus(p,applications,EMPLOYEES);
 const projectCount = p => {const s=status(p);return {...s,total:s.targetIds.length,registered:s.appliedIds.length,required:s.requiredPendingIds.length};};
 const checkedAt = () => new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}).format(new Date()).replace(' ','T');
 const getProject = id => PROJECTS.find(p=>p.id===id);
+const visibleProject = p => Boolean(p&&!p.trashedAt);
 const getTicket = id => TICKETS.find(t=>t.id===id);
 const ticketState = t => completed[t.id] ? 'done' : t.state;
 const projectTickets = id => TICKETS.filter(t=>t.project===id);
@@ -139,7 +141,7 @@ const pendingProjects = () => PROJECTS.filter(p=>pendingTickets(p.id).length);
 const dayKey = d => d.toISOString().slice(0,10);
 const daysLeft = p => Math.round((Date.parse(p.deadline+'T00:00:00Z')-Date.parse(TODAY_KST+'T00:00:00Z'))/86400000);
 const deadlineLabel = p => daysLeft(p)<0?`마감 ${-daysLeft(p)}일 경과`:daysLeft(p)===0?'오늘 마감':`D-${daysLeft(p)}`;
-const activeProject = p => Boolean(p&&(!p.lifecycle||p.lifecycle==='active'));
+const activeProject = p => Boolean(visibleProject(p)&&(!p.lifecycle||p.lifecycle==='active'));
 const needsDeadlineReview = t => {
   const project=getProject(t.project);
   const deadline=project?.deadlineAt;
@@ -210,7 +212,7 @@ function restore() {
     }
     if(saved.version>=4 && saved.drafts && typeof saved.drafts==='object') {
       const knownEmployees=new Set(EMPLOYEES.map(e=>e.id)),knownTeams=new Set(TEAMS.map(t=>t.id)),knownChannels=new Set(CHANNELS.map(c=>c.id));
-      TICKETS.filter(t=>ticketState(t)==='pending'&&getProject(t.project)).forEach(t=>{
+      TICKETS.filter(t=>['pending','scheduled'].includes(ticketState(t))&&getProject(t.project)).forEach(t=>{
         const source=saved.drafts[t.id];if(!source||typeof source!=='object')return;
         const d=getDraft(t);
         if(typeof source.body==='string'&&source.body.length<=20000)d.body=source.body;
@@ -337,6 +339,7 @@ function calendarCoversProject(project){
   return Boolean(officialCalendar&&Number.isInteger(year)&&[year-1,year].every(item=>officialCalendar.years?.includes(item)));
 }
 function reconcileProjectTickets(project){
+  if(!visibleProject(project))return false;
   if(project.lifecycle&&project.lifecycle!=='active'){
     let changed=false;
     for(const ticket of TICKETS.filter(t=>t.project===project.id))if(['pending','scheduled','deferred'].includes(ticket.state)){ticket.state='retired';ticket.lifecycleReason=project.lifecycle==='cancelled'?'프로젝트 취소':'운영 종료';changed=true;}
@@ -377,14 +380,14 @@ function reconcileProjectTickets(project){
 }
 async function refreshOfficialCalendarAndTickets(){
   if(!cloudUser)return;
-  const years=[...new Set(PROJECTS.filter(p=>p.dataKind!=='sample').flatMap(p=>[Number(p.deadlineAt?.slice(0,4))-1,Number(p.deadlineAt?.slice(0,4))]))].filter(Boolean);
+  const years=[...new Set(PROJECTS.filter(p=>visibleProject(p)&&p.dataKind!=='sample').flatMap(p=>[Number(p.deadlineAt?.slice(0,4))-1,Number(p.deadlineAt?.slice(0,4))]))].filter(Boolean);
   if(!years.length){holidayError='';officialCalendar=null;return;}
   try{
     const batches=[];for(let index=0;index<years.length;index+=4)batches.push(years.slice(index,index+4));
     const calendars=[];for(const batch of batches)calendars.push(await cloudRequest('/api/holidays',{method:'POST',body:{years:batch}}));
     officialCalendar={status:'success',years,holidays:[...new Set(calendars.flatMap(item=>item.holidays))].sort(),checkedAt:calendars.at(-1).checkedAt,source:calendars.at(-1).source};
     holidayError='';let changed=false;
-    for(const project of PROJECTS.filter(p=>p.dataKind!=='sample'))changed=reconcileProjectTickets(project)||changed;
+    for(const project of PROJECTS.filter(p=>visibleProject(p)&&p.dataKind!=='sample'))changed=reconcileProjectTickets(project)||changed;
     if(changed){persist();if(route().view!=='edit-project')render();}
   }catch(error){officialCalendar=null;holidayError=error.message;if(route().view!=='edit-project')render();}
 }
@@ -447,6 +450,7 @@ function applyAutomationTickets(rows){
   for(const row of rows){
     const ticket=row.payload;
     if(!ticket?.key||!ticket.project)continue;
+    if(!visibleProject(getProject(ticket.project)))continue;
     const index=TICKETS.findIndex(item=>item.key===ticket.key);
     if(index<0){TICKETS.push(ticket);changed=true;continue;}
     const local=TICKETS[index];
@@ -517,8 +521,8 @@ function applyCloudDraft(t,record) {
 async function hydrateCloudDrafts() {
   const {drafts:remote}=await readDrafts();
   const byId=new Map(remote.map(item=>[item.id,item]));
-  for(const t of TICKETS.filter(item=>ticketState(item)==='pending')){
-    const local=drafts[t.id],record=byId.get(t.id);
+  for(const t of TICKETS.filter(item=>['pending','scheduled'].includes(ticketState(item)))){
+    const local=drafts[t.id],record=byId.get(await draftStorageId(t.id));
     if(record){
       if(local?._cloudDirty && local._cloudVersion!==record.version){setCloudState(t,'conflict',{remote:record});continue;}
       if(local?._cloudDirty){setCloudState(t,'pending',{remote:record});scheduleCloudSave(t,true);continue;}
@@ -573,7 +577,7 @@ async function initializeCloud() {
         prepareOperatorCache();
         try {await hydrateOperatorState();}catch {operatorSaveStatus='error';renderCloudButton();}
         try {await refreshAutomatedSheetState();}catch(error){sheetSyncError=error.message;}
-        try {await hydrateCloudDrafts();}catch {for(const t of TICKETS.filter(item=>ticketState(item)==='pending'))if(drafts[t.id])setCloudState(t,'error');}
+        try {await hydrateCloudDrafts();}catch {for(const t of TICKETS.filter(item=>['pending','scheduled'].includes(ticketState(item))))if(drafts[t.id])setCloudState(t,'error');}
         void refreshOfficialCalendarAndTickets();
       }
     }
@@ -689,19 +693,21 @@ function toast(message) {
   toastTimeout=setTimeout(()=>$('#toast').hidden=true,4500);
 }
 function route() {
-  const [view,id] = location.hash.replace(/^#/,'').split('/');
-  if(view==='project'&&getProject(id)) return {view,id};
-  if(view==='edit-project' && (id==='new'||getProject(id))) return {view,id};
-  if(view==='review'&&getTicket(id)&&ticketState(getTicket(id))==='pending')return {view,id};
-  if(['projects','history'].includes(view))return {view};
+  const [view,encodedId] = location.hash.replace(/^#/,'').split('/');
+  let id;
+  try{id=decodeURIComponent(encodedId||'');}catch{return {view:'home'};}
+  if(view==='project'&&visibleProject(getProject(id))) return {view,id};
+  if(view==='edit-project' && (id==='new'||visibleProject(getProject(id)))) return {view,id};
+  if(view==='review'&&getTicket(id)&&visibleProject(getProject(getTicket(id).project))&&['pending','scheduled'].includes(ticketState(getTicket(id))))return {view,id};
+  if(['projects','history','trash'].includes(view))return {view};
   return {view:'home'};
 }
 function renderNavigation(r) {
-  const active=r.view==='review'||r.view==='project'||r.view==='edit-project'?'projects':r.view;
+  const active=r.view==='review'||r.view==='project'||r.view==='edit-project'||r.view==='trash'?'projects':r.view;
   $('#navigation').innerHTML=[['home','home','홈'],['projects','folder','프로젝트'],['history','message','안내 기록']].map(([view,symbol,label])=>`<a class="nav-item ${active===view?'active':''}" href="#${view}" ${active===view?'aria-current="page"':''}>${icon(symbol)}<span>${label}</span>${view==='home'&&pendingTickets().length?`<span class="nav-count">${pendingTickets().length}</span>`:''}</a>`).join('');
   const projectId=r.view==='project'?r.id:r.view==='review'?getTicket(r.id).project:r.view==='edit-project'&&r.id!=='new'?r.id:null;
   $('#sidebar-projects').innerHTML=PROJECTS.filter(activeProject).map(p=>`<a href="#project/${p.id}" class="project-shortcut ${projectId===p.id?'active':''}" ${projectId===p.id?'aria-current="page"':''}><span class="project-dot ${p.id}"></span>${p.name}</a>`).join('');
-  const title=r.view==='home'?'홈':r.view==='projects'?'프로젝트':r.view==='history'?'안내 기록':r.view==='project'?getProject(r.id).name:r.view==='edit-project'?(r.id==='new'?'프로젝트 등록':'프로젝트 수정'):`${getProject(getTicket(r.id).project).name} / 보낼 내용 확인`;
+  const title=r.view==='home'?'홈':r.view==='projects'?'프로젝트':r.view==='trash'?'휴지통':r.view==='history'?'안내 기록':r.view==='project'?getProject(r.id).name:r.view==='edit-project'?(r.id==='new'?'프로젝트 등록':'프로젝트 수정'):`${getProject(getTicket(r.id).project).name} / ${ticketState(getTicket(r.id))==='scheduled'?'초안 미리 작성':'보낼 내용 확인'}`;
   $('#breadcrumb').textContent=`운영 공간 / ${title}`;
   document.title=`${title} | 팀 행사·복지`;
 }
@@ -709,7 +715,7 @@ function heading(title,description,actions='',eyebrow='') {
   return `<div class="page-heading"><div>${eyebrow?`<p class="eyebrow">${eyebrow}</p>`:''}<h1>${title}</h1>${description?`<p class="page-description">${description}</p>`:''}</div>${actions?`<div class="actions">${actions}</div>`:''}</div>`;
 }
 function summary() {
-  return `<div class="summary-strip">${[['진행 중인 프로젝트',PROJECTS.filter(activeProject).length,'개'],['확인을 기다리는 일',pendingTickets().length,'건','orange'],['7일 안에 신청 마감',PROJECTS.filter(p=>activeProject(p)&&daysLeft(p)>=0&&daysLeft(p)<=7).length,'개'],['안내 기록',records.length,'건']].map(([label,value,unit,color])=>`<div class="summary-item"><div class="summary-label">${label}</div><div class="summary-value ${color||''}">${value}<small>${unit}</small></div></div>`).join('')}</div>`;
+  return `<div class="summary-strip">${[['진행 중인 프로젝트',PROJECTS.filter(activeProject).length,'개'],['확인을 기다리는 일',pendingTickets().length,'건','orange'],['7일 안에 신청 마감',PROJECTS.filter(p=>activeProject(p)&&daysLeft(p)>=0&&daysLeft(p)<=7).length,'개'],['안내 기록',records.filter(r=>visibleProject(getProject(r.project))).length,'건']].map(([label,value,unit,color])=>`<div class="summary-item"><div class="summary-label">${label}</div><div class="summary-value ${color||''}">${value}<small>${unit}</small></div></div>`).join('')}</div>`;
 }
 function projectRows(list) {
   return list.map(p=>{
@@ -724,12 +730,12 @@ function home() {
   const list=pendingProjects();
   return `${heading('오늘 확인할 일','동료들의 신청과 안내, 오늘 필요한 일부터 챙겨요.','<a class="button" href="#projects">프로젝트 둘러보기 '+icon('arrow')+'</a>',new Date().toLocaleDateString('ko-KR',{timeZone:'Asia/Seoul',month:'long',day:'numeric',weekday:'long'}))}${sheetSourcePanel()}${summary()}
     <div class="home-top"><section class="panel" aria-labelledby="today-title"><div class="panel-heading"><div><h2 id="today-title">함께 챙길 프로젝트 <span class="count">${list.length}</span></h2><p class="caption muted">프로젝트를 열면 전체 티켓을 확인할 수 있어요.</p></div>${tag('확인 기다림','orange')}</div>${list.length?projectRows(list):'<p class="empty">오늘 확인할 일을 모두 챙겼어요.<br>프로젝트에서 다음 일정을 확인할 수 있어요.</p>'}</section>
-    <section class="panel home-recent" aria-labelledby="recent-title"><div class="panel-heading"><h2 id="recent-title">최근 안내 기록</h2><a href="#history" class="caption muted">전체 보기 ${icon('arrow')}</a></div>${recentRows([...records].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,3))}<div class="panel-bottom">안내를 누르면 원문과 Slack 링크를 확인해요.</div></section></div>
+    <section class="panel home-recent" aria-labelledby="recent-title"><div class="panel-heading"><h2 id="recent-title">최근 안내 기록</h2><a href="#history" class="caption muted">전체 보기 ${icon('arrow')}</a></div>${recentRows(records.filter(r=>visibleProject(getProject(r.project))).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,3))}<div class="panel-bottom">안내를 누르면 원문과 Slack 링크를 확인해요.</div></section></div>
     <section class="panel" aria-labelledby="calendar-title"><div class="panel-heading"><div><h2 id="calendar-title">팀 행사와 복지 일정</h2><p class="caption muted">신청 마감부터 동료들과 함께할 날까지</p></div><div class="segmented" aria-label="일정 보기 방식"><button data-calendar-view="calendar" aria-pressed="${calendar.view==='calendar'}">캘린더</button><button data-calendar-view="list" aria-pressed="${calendar.view==='list'}">목록</button></div></div><div id="calendar-content">${calendar.view==='calendar'?calendarMarkup():projectTable()}</div></section>`;
 }
 function schedule() {
   const events=[];
-  PROJECTS.forEach(p=>{
+  PROJECTS.filter(visibleProject).forEach(p=>{
     events.push({project:p.id,date:p.deadline,kind:'deadline',label:'마감',title:`${p.short} 신청 마감`,time:p.deadlineAt.slice(11)});
     events.push({project:p.id,date:p.event,kind:'event',label:'행사',title:p.eventLabel,time:''});
     projectTickets(p.id).filter(t=>t.ruleGenerated&&t.dueAt&&['pending','scheduled','deferred'].includes(ticketState(t))).forEach(t=>events.push({project:p.id,date:t.date,kind:'reminder',label:'점검',title:t.title,time:new Date(t.dueAt).toLocaleTimeString('ko-KR',{timeZone:'Asia/Seoul',hour:'2-digit',minute:'2-digit'})}));
@@ -747,11 +753,15 @@ function calendarMarkup() {
     }).join('')}</div><div class="calendar-selection"><h3>${dateLabel(calendar.selected)} 일정</h3><div class="date-events">${events.filter(e=>e.date===calendar.selected).map(e=>`<div class="date-event"><span>${tag(e.label,e.kind==='deadline'?'orange':e.kind==='event'?'green':'gray')} ${escapeHtml(e.title)} <span class="muted">${e.time}</span></span><a href="#project/${e.project}">프로젝트 보기 →</a></div>`).join('')||'<p class="caption muted">이날은 예정된 일정이 없어요.</p>'}</div></div>`;
 }
 function projectTable() {
-  return `<table class="project-table"><thead><tr><th scope="col">프로젝트</th><th scope="col">신청 마감</th><th scope="col">신청 현황</th><th scope="col">확인할 일</th></tr></thead><tbody>${PROJECTS.map(p=>`<tr><td><a href="#project/${p.id}">${escapeHtml(p.name)}</a></td><td>${dateLabel(p.deadline)}</td><td>${projectCount(p).registered}/${projectCount(p).total}명</td><td>${tag(`${pendingTickets(p.id).length}건`,pendingTickets(p.id).length?'orange':'green')}</td></tr>`).join('')}</tbody></table>`;
+  return `<table class="project-table"><thead><tr><th scope="col">프로젝트</th><th scope="col">신청 마감</th><th scope="col">신청 현황</th><th scope="col">확인할 일</th></tr></thead><tbody>${PROJECTS.filter(visibleProject).map(p=>`<tr><td><a href="#project/${p.id}">${escapeHtml(p.name)}</a></td><td>${dateLabel(p.deadline)}</td><td>${projectCount(p).registered}/${projectCount(p).total}명</td><td>${tag(`${pendingTickets(p.id).length}건`,pendingTickets(p.id).length?'orange':'green')}</td></tr>`).join('')}</tbody></table>`;
 }
 function projectsPage() {
-  const active=PROJECTS.filter(activeProject),ended=PROJECTS.filter(p=>!activeProject(p));
-  return `${heading('우리 팀의 프로젝트','신청 현황과 일정, 프로젝트별 전체 티켓을 살펴봐요.',`<a class="button primary" href="#edit-project/new">${icon('plus')} 프로젝트 등록</a>`)}${summary()}<section class="panel"><div class="panel-heading"><h2>진행 중인 프로젝트 <span class="count">${active.length}</span></h2></div>${projectRows(active)}</section>${ended.length?`<section class="panel" style="margin-top:18px"><div class="panel-heading"><h2>취소·종료된 프로젝트 <span class="count">${ended.length}</span></h2></div>${projectRows(ended)}</section>`:''}<div class="actions" style="margin-top:18px;justify-content:flex-end"><button class="button compact" data-action="reset-sample" ${cloudUser?'disabled':''}>${resetArmed?'이 브라우저의 예시 데이터 초기화 확인':'이 브라우저의 예시 데이터 초기화'}</button></div>${cloudUser?'<p class="help">서버 연결 중에는 예시 초기화를 사용할 수 없습니다. 서버 운영 정보는 보호됩니다.</p>':''}`;
+  const active=PROJECTS.filter(activeProject),ended=PROJECTS.filter(p=>visibleProject(p)&&!activeProject(p)),trashed=PROJECTS.filter(p=>p.trashedAt);
+  return `${heading('우리 팀의 프로젝트','신청 현황과 일정, 프로젝트별 전체 티켓을 살펴봐요.',`<a class="button" href="#trash">휴지통 ${trashed.length}건</a><a class="button primary" href="#edit-project/new">${icon('plus')} 프로젝트 등록</a>`)}${summary()}<section class="panel"><div class="panel-heading"><h2>진행 중인 프로젝트 <span class="count">${active.length}</span></h2></div>${projectRows(active)}</section>${ended.length?`<section class="panel" style="margin-top:18px"><div class="panel-heading"><h2>취소·종료된 프로젝트 <span class="count">${ended.length}</span></h2></div>${projectRows(ended)}</section>`:''}<div class="actions" style="margin-top:18px;justify-content:flex-end"><button class="button compact" data-action="reset-sample" ${cloudUser?'disabled':''}>${resetArmed?'이 브라우저의 예시 데이터 초기화 확인':'이 브라우저의 예시 데이터 초기화'}</button></div>${cloudUser?'<p class="help">서버 연결 중에는 예시 초기화를 사용할 수 없습니다. 서버 운영 정보는 보호됩니다.</p>':''}`;
+}
+function trashPage(){
+  const projects=PROJECTS.filter(p=>p.trashedAt).sort((a,b)=>b.trashedAt.localeCompare(a.trashedAt));
+  return `<a href="#projects" class="back-link">${icon('back')} 프로젝트로 돌아가기</a>${heading('휴지통','여기로 옮긴 프로젝트와 연결된 티켓·초안·안내 기록은 일반 화면에서 숨겨집니다. 복원하면 다시 표시됩니다.')}<section class="panel" aria-label="휴지통 프로젝트"><div class="panel-heading"><h2>보관된 프로젝트 <span class="count">${projects.length}</span></h2></div>${projects.map(p=>`<div class="trash-row"><div><h3>${escapeHtml(p.name)}</h3><p class="caption muted">티켓 ${projectTickets(p.id).length}건 · 안내 기록 ${projectRecords(p.id).length}건 · 신청 ${applications.filter(a=>a.projectId===p.id).length}건</p></div><button class="button compact" data-action="restore-project" data-project="${escapeHtml(p.id)}">복원</button></div>`).join('')||'<p class="empty">휴지통이 비어 있어요.</p>'}</section>`;
 }
 function employeePickerMarkup(p) {
   const target=new Set(p?.targetIds||[]),required=new Set(p?.requiredIds||[]);
@@ -883,7 +893,7 @@ function ticketMarkup(t) {
     const project=getProject(t.project);
     return `<article class="ticket expired-ticket" data-ticket-id="${escapeHtml(t.id)}"><div class="ticket-heading"><div class="ticket-title"><h3>${escapeHtml(t.title)}</h3><div class="caption muted">${escapeHtml(due)} · ${escapeHtml(t.purpose)}</div></div>${tag('기한 경과 · 재검토','orange')}</div><p class="ticket-body">신청 마감 ${dateLabel(project.deadline)} ${escapeHtml(project.deadlineAt.slice(11))}이 지났습니다. 마감 연장 여부를 확인하기 전에는 이 신청 안내를 실행할 수 없어요.</p><div class="ticket-footer"><a class="button compact" href="#edit-project/${escapeHtml(project.id)}">마감 정보 확인</a>${state==='pending'?`<a class="button compact" href="#review/${encodeURIComponent(t.id)}">초안 보기</a>`:''}</div></article>`;
   }
-  return `<article class="ticket" data-ticket-id="${escapeHtml(t.id)}"><div class="ticket-heading"><span class="ticket-status-icon ${state}" aria-hidden="true">${state==='done'?'✓':state==='scheduled'?'◷':'•'}</span><div class="ticket-title"><h3>${escapeHtml(t.title)}</h3><div class="caption muted">${escapeHtml(due)} · ${escapeHtml(t.purpose)} ${t.ruleGenerated?'· 규칙 생성':'· 예시 티켓'}</div></div>${tag(stateLabel(state),stateColor(state))}</div><p class="ticket-body">${escapeHtml(t.ruleGenerated?t.reason:state==='done'?'완료된 예시 티켓이에요. 당시 보낸 안내의 원문과 기록을 확인할 수 있어요.':t.reason)}${t.originalTimes?.some(time=>time!==t.dueAt)?`<br><small>원래 점검 시각 ${escapeHtml(new Date(t.originalTimes[0]).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}))} → 공휴일·업무시간 조정 ${escapeHtml(due)}</small>`:''}${t.decisionReason?`<br><small>운영자 사유: ${escapeHtml(t.decisionReason)}${t.reviewAt?` · 다시 확인 ${escapeHtml(t.reviewAt)}`:''}</small>`:''}</p><div class="ticket-footer"><span>${state==='pending'?'담당자 확인 후 안내해요':state==='scheduled'?'예정 시각에 신청 현황을 확인해요':state==='done'?'안내 기록과 연결되어 있어요':''}</span><div class="actions">${state==='pending'?`<a href="#review/${encodeURIComponent(t.id)}" class="button compact">보낼 내용 확인 ${icon('arrow')}</a>`:''}${t.ruleGenerated&&['pending','scheduled','deferred'].includes(state)?`<button class="button compact" data-ticket-decision="deferred" data-ticket-id="${escapeHtml(t.id)}">보류</button><button class="button compact" data-ticket-decision="dismissed" data-ticket-id="${escapeHtml(t.id)}">안내하지 않기</button>`:''}${state==='done'&&recordId?`<button class="button compact" data-record="${escapeHtml(recordId)}">보낸 안내 보기 ${icon('external')}</button>`:''}</div></div></article>`;
+  return `<article class="ticket" data-ticket-id="${escapeHtml(t.id)}"><div class="ticket-heading"><span class="ticket-status-icon ${state}" aria-hidden="true">${state==='done'?'✓':state==='scheduled'?'◷':'•'}</span><div class="ticket-title"><h3>${escapeHtml(t.title)}</h3><div class="caption muted">${escapeHtml(due)} · ${escapeHtml(t.purpose)} ${t.ruleGenerated?'· 규칙 생성':'· 예시 티켓'}</div></div>${tag(stateLabel(state),stateColor(state))}</div><p class="ticket-body">${escapeHtml(t.ruleGenerated?t.reason:state==='done'?'완료된 예시 티켓이에요. 당시 보낸 안내의 원문과 기록을 확인할 수 있어요.':t.reason)}${t.originalTimes?.some(time=>time!==t.dueAt)?`<br><small>원래 점검 시각 ${escapeHtml(new Date(t.originalTimes[0]).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}))} → 공휴일·업무시간 조정 ${escapeHtml(due)}</small>`:''}${t.decisionReason?`<br><small>운영자 사유: ${escapeHtml(t.decisionReason)}${t.reviewAt?` · 다시 확인 ${escapeHtml(t.reviewAt)}`:''}</small>`:''}</p><div class="ticket-footer"><span>${state==='pending'?'담당자 확인 후 안내해요':state==='scheduled'?'예정 시각에 신청 현황을 확인해요':state==='done'?'안내 기록과 연결되어 있어요':''}</span><div class="actions">${state==='pending'||state==='scheduled'?`<a href="#review/${encodeURIComponent(t.id)}" class="button compact">${state==='scheduled'?'초안 미리 작성':'보낼 내용 확인'} ${icon('arrow')}</a>`:''}${t.ruleGenerated&&['pending','scheduled','deferred'].includes(state)?`<button class="button compact" data-ticket-decision="deferred" data-ticket-id="${escapeHtml(t.id)}">보류</button><button class="button compact" data-ticket-decision="dismissed" data-ticket-id="${escapeHtml(t.id)}">안내하지 않기</button>`:''}${state==='done'&&recordId?`<button class="button compact" data-record="${escapeHtml(recordId)}">보낸 안내 보기 ${icon('external')}</button>`:''}</div></div></article>`;
 }
 const applicationStateLabel = state => ({none:'미신청',applied:'신청 · 확정 대기',confirmed:'확정',cancelled:'신청 취소'}[state]||state);
 function applicationLog(projectId) {
@@ -911,16 +921,16 @@ function projectPage(id) {
   const p=getProject(id),s=projectCount(p),tickets=projectTickets(id),recent=projectRecords(id),pending=pendingTickets(id).length;
   const breakdown=applicationBreakdown(s);
   const sorted=sortTicketsForDisplay(tickets,ticketState,t=>records.find(r=>r.id===(completed[t.id]||t.record))?.date);
-  return `<a href="#home" class="back-link">${icon('back')} 홈으로 돌아가기</a><div class="page-heading"><div class="project-hero">${projectSymbol(p)}<div><p class="eyebrow">${escapeHtml(p.type)} 프로젝트 · ${tag(p.dataKind==='sample'?'예시 데이터':'직접 입력','gray')}</p><h1>${escapeHtml(p.name)}</h1><p class="page-description">${escapeHtml(p.description)}</p></div></div><div class="actions"><a class="button" href="#edit-project/${id}">운영 정보 수정</a><button class="button" data-action="new-record" data-project="${id}">${icon('plus')} 안내 기록 추가</button></div></div>
+  return `<a href="#home" class="back-link">${icon('back')} 홈으로 돌아가기</a><div class="page-heading"><div class="project-hero">${projectSymbol(p)}<div><p class="eyebrow">${escapeHtml(p.type)} 프로젝트 · ${tag(p.dataKind==='sample'?'예시 데이터':'직접 입력','gray')}</p><h1>${escapeHtml(p.name)}</h1><p class="page-description">${escapeHtml(p.description)}</p></div></div><div class="actions"><a class="button" href="#edit-project/${id}">운영 정보 수정</a><button class="button" data-action="new-record" data-project="${id}">${icon('plus')} 안내 기록 추가</button>${p.dataKind==='local'?`<button class="button" data-action="trash-project" data-project="${escapeHtml(p.id)}">휴지통으로 이동</button>`:''}</div></div>
     ${p.lifecycle&&p.lifecycle!=='active'?`<p class="error-message">${p.lifecycle==='cancelled'?'취소된 프로젝트입니다.':'운영이 종료된 프로젝트입니다.'} 새 안내 티켓은 만들지 않습니다.</p>`:''}${holidayError&&p.dataKind!=='sample'?`<p class="error-message">자동 티켓: ${escapeHtml(holidayError)}</p>`:''}${officialCalendar&&p.dataKind!=='sample'?`<p class="caption muted">공휴일 기준: ${escapeHtml(officialCalendar.source)} · ${escapeHtml(new Date(officialCalendar.checkedAt).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}))} 조회</p>`:''}<section class="application-summary" aria-label="필수·자율 신청 현황"><div class="application-summary-heading"><div><h2>신청 현황</h2><p>필수와 자율 신청을 나눠 집계했어요. 각 행의 신청 + 신청 전 = 대상입니다.</p></div><strong>${s.rate===null?'대상 없음':Math.round(s.rate*100)+'%'}<small> 전체 신청률</small></strong></div><div class="summary-table-wrap"><table class="application-table"><thead><tr><th scope="col">구분</th><th scope="col">대상</th><th scope="col">신청</th><th scope="col">신청 전</th></tr></thead><tbody>${[['필수 신청',breakdown.required],['자율 신청',breakdown.voluntary],['합계',breakdown.total]].map(([label,row])=>`<tr${label==='합계'?' class="total-row"':''}><th scope="row">${label}</th><td>${row.target}명</td><td>${row.applied}명</td><td class="pending-count">${row.pending}명</td></tr>`).join('')}</tbody></table></div><p class="application-summary-note">신청에는 확정 대기 중인 동료도 포함됩니다. 취소한 신청은 ‘신청 전’으로 집계합니다.</p></section>
     ${rosterMarkup(p,s)}
     <div class="tabs" role="tablist" aria-label="프로젝트 내용"><button class="tab" id="tickets-tab" role="tab" data-tab="tickets" aria-selected="${activeTab==='tickets'}" aria-controls="project-content">전체 티켓 <span class="count">${tickets.length}</span></button><button class="tab" id="sent-tab" role="tab" data-tab="history" aria-selected="${activeTab==='history'}" aria-controls="project-content">보낸 안내 <span class="count">${recent.length}</span></button></div>
     <div id="project-content" role="tabpanel" aria-labelledby="${activeTab==='tickets'?'tickets-tab':'sent-tab'}">${activeTab==='history'?`<section class="panel">${historyRows(recent)}</section>`:`<div class="detail-grid"><section class="panel" aria-label="${escapeHtml(p.name)} 전체 티켓"><div class="panel-heading"><div><h2>프로젝트의 모든 티켓</h2><p class="caption muted">확인 대기 ${pending}건 · 예정 ${tickets.filter(t=>ticketState(t)==='scheduled'&&!needsDeadlineReview(t)).length}건 · 기한 경과 ${tickets.filter(needsDeadlineReview).length}건 · 완료 ${tickets.filter(t=>ticketState(t)==='done').length}건</p></div></div>${sorted.map(ticketMarkup).join('')||'<p class="empty">현재 확인할 티켓이 없어요.</p>'}</section><aside><section class="panel schedule-panel"><h2>일정과 최근 안내</h2><div class="info-line"><span>신청 마감</span><p>${dateLabel(p.deadline)} ${escapeHtml(p.deadlineAt.slice(11))} ${tag(deadlineLabel(p),daysLeft(p)<=3?'orange':'gray')}</p></div><div class="info-line"><span>${p.type==='행사'?'행사일':escapeHtml(p.eventLabel||'운영 일정')}</span><p>${dateLabel(p.event)}</p></div><div class="info-line"><span>담당자</span><p>${escapeHtml(p.owner)}</p></div><div class="info-line"><span>신청 링크</span><p>${p.applicationUrl?`<a href="${escapeHtml(p.applicationUrl)}" target="_blank" rel="noopener noreferrer">신청 페이지 열기</a>`:'등록 전'}</p></div><h3 style="margin:18px 0 12px">최근 보낸 안내</h3>${recent.slice(0,2).map(r=>`<button class="linked-history" data-record="${escapeHtml(r.id)}" aria-label="${escapeHtml(r.title)} 원문 보기"><div><strong>${escapeHtml(r.title)}</strong><small>${recordDate(r.date)} · ${escapeHtml(r.route)}</small></div>${icon('arrow')}</button>`).join('')||'<p class="caption muted">아직 보낸 안내가 없어요.</p>'}</section></aside></div>`}</div>`;
 }
 function historyPage() {
-  const projects=PROJECTS.filter(p=>historyFilter==='all'||p.id===historyFilter);
+  const projects=PROJECTS.filter(p=>visibleProject(p)&&(historyFilter==='all'||p.id===historyFilter));
   const list=records.filter(r=>projects.some(p=>p.id===r.project)&&(historySourceFilter==='all'||r.source===historySourceFilter)).sort((a,b)=>b.date.localeCompare(a.date));
-  return `${heading('안내 기록','',`<button class="button" data-action="new-record">${icon('plus')} 안내 기록 추가</button>`)}<div class="history-toolbar"><strong>안내 ${list.length}건</strong><div class="field"><label for="history-project">프로젝트</label><select id="history-project"><option value="all">전체 프로젝트</option>${PROJECTS.map(p=>`<option value="${p.id}" ${historyFilter===p.id?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select></div></div><div class="history-projects">${projects.map(p=>{const projectList=list.filter(r=>r.project===p.id);return `<section class="panel history-project" aria-label="${escapeHtml(p.name)} 안내 기록"><div class="history-project-heading">${projectSymbol(p)}<div><span class="history-project-sticker">${escapeHtml(p.type)}</span><h2><a href="#project/${p.id}">${escapeHtml(p.name)} ${icon('arrow')}</a></h2></div><span class="count">${projectList.length}</span></div>${projectList.length?['initial','reminder'].map(kind=>{const items=projectList.filter(r=>recordKind(r)===kind);return items.length?`<div class="history-group"><h3>${kind==='initial'?'첫 안내':'추가 안내'} <span class="count">${items.length}</span></h3>${historyRows(items)}</div>`:'';}).join(''):'<p class="history-empty">아직 보낸 안내가 없습니다.</p>'}</section>`;}).join('')}</div>`;
+  return `${heading('안내 기록','',`<button class="button" data-action="new-record">${icon('plus')} 안내 기록 추가</button>`)}<div class="history-toolbar"><strong>안내 ${list.length}건</strong><div class="field"><label for="history-project">프로젝트</label><select id="history-project"><option value="all">전체 프로젝트</option>${PROJECTS.filter(visibleProject).map(p=>`<option value="${p.id}" ${historyFilter===p.id?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select></div></div><div class="history-projects">${projects.map(p=>{const projectList=list.filter(r=>r.project===p.id);return `<section class="panel history-project" aria-label="${escapeHtml(p.name)} 안내 기록"><div class="history-project-heading">${projectSymbol(p)}<div><span class="history-project-sticker">${escapeHtml(p.type)}</span><h2><a href="#project/${p.id}">${escapeHtml(p.name)} ${icon('arrow')}</a></h2></div><span class="count">${projectList.length}</span></div>${projectList.length?['initial','reminder'].map(kind=>{const items=projectList.filter(r=>recordKind(r)===kind);return items.length?`<div class="history-group"><h3>${kind==='initial'?'첫 안내':'추가 안내'} <span class="count">${items.length}</span></h3>${historyRows(items)}</div>`:'';}).join(''):'<p class="history-empty">아직 보낸 안내가 없습니다.</p>'}</section>`;}).join('')}</div>`;
 }
 function noticeSummaryRows(d){
   const labels={confirmed:'확인됨',needs_review:'확인 필요',conflict:'자료 간 충돌',missing:'내용 없음'};
@@ -939,10 +949,7 @@ function noticeCardMarkup(d,p){
   return `<section class="notice-card panel" aria-labelledby="notice-card-title"><div class="notice-card-heading"><div><p class="eyebrow">현재 프로젝트 정보로 준비</p><h2 id="notice-card-title">이번 안내의 정보</h2><p class="help">새 안내는 저장된 프로젝트 값에서 시작합니다. 이번 안내에만 필요한 내용은 아래에서 수정할 수 있습니다.</p>${d.briefStale&&d.body.trim()?'<p class="error-message">정보가 바뀌었습니다. 아래의 본문을 다시 확인하거나 새 문구를 생성해주세요.</p>':''}</div><a class="button compact" href="#edit-project/${encodeURIComponent(p.id)}">프로젝트 정보 수정</a></div><dl id="notice-summary-list" class="notice-summary-list">${noticeSummaryRows(d)}</dl><details class="notice-card-editor"><summary>이번 안내만 수정·근거 보기</summary><div class="notice-card-grid">${fields}</div></details><p class="help">무엇을·해야 할 일·마감의 확인된 값이 있어야 Gemini로 문구를 만들 수 있습니다. 정보 확인 후 아래 생성 버튼을 누르세요.</p></section>`;
 }
 
-const noticeKind = t => t.kind==='initial'||t.purpose==='첫 안내'?'initial'
-  :t.kind==='deadline'||/D-\d|마감|마지막/.test(`${t.title} ${t.purpose}`)?'deadline'
-  :t.kind==='reminder'||/리마인드|다시|추가|한 번 더|필수 참여/.test(`${t.title} ${t.purpose}`)
-    ||projectRecords(t.project).some(record=>recordKind(record)==='initial')?'reminder':'initial';
+const noticeKind = t => noticePurposeForTicket(t,projectRecords(t.project).some(record=>recordKind(record)==='initial'));
 function getDraft(t) {
   if(!drafts[t.id])drafts[t.id]=prepareNoticeDraft(getProject(t.project),{body:'',purpose:noticeKind(t),tone:'friendly',mode:'dm',scope:t.project==='event'?'project':'pending',teams:TEAMS.map(t=>t.id),dmSelection:'team',selectedIds:[],channels:[],confirmed:false,confirmedSignature:'',confirmedSourceSnapshot:'',confirmedSpreadsheetId:'',resources:[],briefStale:false,_cloudVersion:0,_cloudRevision:0,_cloudDirty:false});
   const fallback=makeNoticeBrief(getProject(t.project));
@@ -1081,15 +1088,17 @@ function projectReviewMarkup(t){
 }
 function reviewPage(id) {
   const t=getTicket(id),p=getProject(t.project),d=getDraft(t);
+  if(ticketState(t)==='scheduled'){d.confirmed=false;d.confirmedSignature='';}
   const resources=(d.resources||[]).map((item,index)=>`<div class="draft-resource"><span>${item.kind==='file'?'📎':'🔗'} ${escapeHtml(item.label)}${item.kind==='file'?` · ${Math.ceil((item.byte_size||0)/1024)} KB`:''}</span>${item.kind==='file'&&cloudUser?`<a class="button compact" href="#" data-open-file="${encodeURIComponent(item.id)}">열기</a>`:''}<button class="button compact" data-remove-resource="${index}">제거</button></div>`).join('')||'<p class="help">이번 안내에 추가한 자료가 없어요.</p>';
-  return `<a href="#project/${p.id}" class="back-link">${icon('back')} ${p.name} 전체 티켓</a>${heading('보낼 내용 확인',`${p.name} · ${t.title}`)}${sheetReviewReminder(p)}${projectReviewMarkup(t)}${noticeCardMarkup(d,p)}<div class="review-grid"><section class="panel form-panel"><h2>동료에게 보낼 메시지</h2><p class="caption muted" style="margin:7px 0 22px">정보 카드로 생성한 초안을 확인하고 다듬어주세요.</p><div class="draft-save-box" role="status" aria-live="polite"><span id="draft-save-state">${escapeHtml(cloudLabel(t))}</span><button class="button compact" id="draft-retry" data-action="retry-draft-save" ${cloudState[t.id]?.status==='error'?'':'hidden'}>다시 시도</button><span id="draft-conflict-actions" class="actions" ${cloudState[t.id]?.status==='conflict'?'':'hidden'}><button class="button compact" data-action="load-cloud-draft">서버 내용 불러오기</button><button class="button compact" data-action="overwrite-cloud-draft">내 변경 저장</button></span></div><div class="field"><label for="draft-tone">말투</label><select id="draft-tone">${Object.entries(NOTICE_TONE_LABELS).map(([key,label])=>`<option value="${key}" ${d.tone===key?'selected':''}>${label}</option>`).join('')}</select><p class="help">말투를 바꿔도 현재 본문은 유지됩니다. 새 문구는 생성 버튼을 눌렀을 때만 요청합니다.</p></div><div class="draft-area"><label class="preview-label" for="draft-body"><span>메시지 본문</span>${tag(d.generatedModel?'Gemini 초안':'직접 작성')}</label><textarea id="draft-body" maxlength="20000">${escapeHtml(d.body)}</textarea><p class="help">신청 링크와 날짜가 맞는지 보내기 전에 확인해주세요.</p></div><div class="draft-attachments"><h3>이번 안내에 포함할 자료</h3><p class="help">링크는 본문에 넣고, 파일은 로그인한 계정의 비공개 저장소에 저장해요. 실제 Slack 전송은 아직 연결되지 않았어요.</p><div id="draft-resources">${resources}</div>${resourcePickerMarkup(t)}<div class="field"><label for="resource-scope">새 자료의 보관 범위</label><select id="resource-scope"><option value="notice">이번 안내에서만 사용</option><option value="project">프로젝트 공통 자료로 보관</option></select></div><div class="resource-add"><input id="resource-label" type="text" maxlength="160" aria-label="링크 이름" placeholder="링크 이름"><input id="resource-url" type="url" maxlength="2000" aria-label="링크 주소" placeholder="https://…"><button class="button" data-action="add-resource-link">링크 추가</button></div><div class="field"><label for="resource-file">파일 첨부 (PDF·DOCX·TXT·MD·이미지, 4MB 이하)</label><input id="resource-file" type="file" accept=".pdf,.docx,.txt,.md,.png,.jpg,.jpeg" ${cloudUser?'':'disabled'}></div>${cloudUser?'':'<p class="help">파일을 저장하려면 상단의 관리자 로그인을 완료해주세요.</p>'}</div></section><section class="panel form-panel"><h2 style="margin-bottom:22px">보내는 방법과 대상</h2><div id="recipient-settings">${recipientSettings(t)}</div></section></div><div class="approval-bar"><div><label class="confirm-row"><input type="checkbox" id="send-confirm" ${d.confirmed?'checked':''}><span id="confirmation-label">${confirmationLabel(d)}</span></label><p>체크하면 최종 본문과 대상을 확인하는 창이 열립니다.</p>${sendPreflightErrors.has(t.id)?`<p class="error-message" role="alert">${escapeHtml(sendPreflightErrors.get(t.id))}</p>`:''}</div><button class="button primary" id="send-button" data-action="simulate-send" ${canSend(t)?'':'disabled'}>${sendLabel(t)} ${icon('arrow')}</button></div>`;
+  return `<a href="#project/${p.id}" class="back-link">${icon('back')} ${p.name} 전체 티켓</a>${heading(ticketState(t)==='scheduled'?'안내 초안 미리 작성':'보낼 내용 확인',`${p.name} · ${t.title}`)}${sheetReviewReminder(p)}${projectReviewMarkup(t)}${noticeCardMarkup(d,p)}<div class="review-grid"><section class="panel form-panel"><h2>동료에게 보낼 메시지</h2><p class="caption muted" style="margin:7px 0 22px">정보 카드로 생성한 초안을 확인하고 다듬어주세요.</p><div class="draft-save-box" role="status" aria-live="polite"><span id="draft-save-state">${escapeHtml(cloudLabel(t))}</span><button class="button compact" id="draft-retry" data-action="retry-draft-save" ${cloudState[t.id]?.status==='error'?'':'hidden'}>다시 시도</button><span id="draft-conflict-actions" class="actions" ${cloudState[t.id]?.status==='conflict'?'':'hidden'}><button class="button compact" data-action="load-cloud-draft">서버 내용 불러오기</button><button class="button compact" data-action="overwrite-cloud-draft">내 변경 저장</button></span></div><div class="field"><label for="draft-tone">말투</label><select id="draft-tone">${Object.entries(NOTICE_TONE_LABELS).map(([key,label])=>`<option value="${key}" ${d.tone===key?'selected':''}>${label}</option>`).join('')}</select><p class="help">말투를 바꿔도 현재 본문은 유지됩니다. 새 문구는 생성 버튼을 눌렀을 때만 요청합니다.</p></div><div class="draft-area"><label class="preview-label" for="draft-body"><span>메시지 본문</span>${tag(d.generatedModel?'Gemini 초안':'직접 작성')}</label><textarea id="draft-body" maxlength="20000">${escapeHtml(d.body)}</textarea><p class="help">신청 링크와 날짜가 맞는지 보내기 전에 확인해주세요.</p></div><div class="draft-attachments"><h3>이번 안내에 포함할 자료</h3><p class="help">링크는 본문에 넣고, 파일은 로그인한 계정의 비공개 저장소에 저장해요. 실제 Slack 전송은 아직 연결되지 않았어요.</p><div id="draft-resources">${resources}</div>${resourcePickerMarkup(t)}<div class="field"><label for="resource-scope">새 자료의 보관 범위</label><select id="resource-scope"><option value="notice">이번 안내에서만 사용</option><option value="project">프로젝트 공통 자료로 보관</option></select></div><div class="resource-add"><input id="resource-label" type="text" maxlength="160" aria-label="링크 이름" placeholder="링크 이름"><input id="resource-url" type="url" maxlength="2000" aria-label="링크 주소" placeholder="https://…"><button class="button" data-action="add-resource-link">링크 추가</button></div><div class="field"><label for="resource-file">파일 첨부 (PDF·DOCX·TXT·MD·이미지, 4MB 이하)</label><input id="resource-file" type="file" accept=".pdf,.docx,.txt,.md,.png,.jpg,.jpeg" ${cloudUser?'':'disabled'}></div>${cloudUser?'':'<p class="help">파일을 저장하려면 상단의 관리자 로그인을 완료해주세요.</p>'}</div></section><section class="panel form-panel"><h2 style="margin-bottom:22px">보내는 방법과 대상</h2><div id="recipient-settings">${recipientSettings(t)}</div></section></div><div class="approval-bar"><div><label class="confirm-row"><input type="checkbox" id="send-confirm" ${d.confirmed?'checked':''}><span id="confirmation-label">${confirmationLabel(d)}</span></label><p>체크하면 최종 본문과 대상을 확인하는 창이 열립니다.</p>${sendPreflightErrors.has(t.id)?`<p class="error-message" role="alert">${escapeHtml(sendPreflightErrors.get(t.id))}</p>`:''}</div><button class="button primary" id="send-button" data-action="simulate-send" ${canSend(t)?'':'disabled'}>${sendLabel(t)} ${icon('arrow')}</button></div>`;
 }
 const confirmationLabel = d => d.mode==='dm'?'보낼 내용과 DM을 받을 동료를 확인했어요.':'보낼 내용과 게시할 채널·공개 범위를 확인했어요.';
 const approvalSignature = t => {const d=getDraft(t),a=audience(getProject(t.project),d);return JSON.stringify({body:d.body,noticeInformation:d.brief,projectSnapshot:d.projectSnapshot,mode:d.mode,recipientIds:a.list.map(e=>e.id),channelIds:a.channels.map(c=>c.id),resources:d.resources||[]});};
 const canSend = t => {const d=getDraft(t),a=audience(getProject(t.project),d);return Boolean(!needsDeadlineReview(t)&&!sendPreflightBusy&&ticketState(t)==='pending'&&cloudUser&&operatorSaveStatus==='saved'&&cloudState[t.id]?.status==='saved'&&!d._cloudDirty&&!d.briefStale&&!d.projectReviewRequired&&!compareDraftProject(d,getProject(t.project)).reviewRequired&&d.confirmed&&d.confirmedSignature===approvalSignature(t)&&d.body.trim()&&(d.mode==='dm'?a.list.length:a.channels.length));};
 const sendLabel = t => {const d=getDraft(t),a=audience(getProject(t.project),d);return d.mode==='dm'?`${a.list.length}명에게 DM 보내기 (예시)`:`${a.channels.length}개 채널에 게시 (예시)`;};
 function sendReadinessMarkup(t){
-  const d=getDraft(t),a=audience(getProject(t.project),d),items=[];
+  const d=getDraft(t),a=audience(getProject(t.project),d),items=[],scheduled=ticketState(t)==='scheduled';
+  if(scheduled)items.push('예정 시각 전에는 보낼 수 없어요. 지금은 초안을 미리 준비해주세요.');
   if(needsDeadlineReview(t))items.push('신청 마감이 지났습니다. 프로젝트 마감 정보를 다시 확인해주세요.');
   if(!cloudUser)items.push('관리자 계정으로 로그인해주세요.');
   else{
@@ -1100,12 +1109,12 @@ function sendReadinessMarkup(t){
   if(d.briefStale&&d.body.trim())items.push('바뀐 정보가 직접 작성한 본문에 반영됐는지 확인해주세요.');
   if(!d.body.trim())items.push('Gemini 초안을 생성하거나 메시지 본문을 직접 작성해주세요.');
   if(d.mode==='dm'&&!a.list.length||d.mode==='channel'&&!a.channels.length)items.push('받을 동료나 채널을 선택해주세요.');
-  if(!d.confirmed||d.confirmedSignature!==approvalSignature(t))items.push('최종 본문과 대상을 확인해주세요.');
-  return `<section id="send-readiness" class="send-readiness" aria-live="polite"><strong>${items.length?'보내기 전에 확인할 일':'보내기 예시 준비됨'}</strong>${items.length?`<ul>${items.map(item=>`<li>${escapeHtml(item)}</li>`).join('')}</ul>`:''}</section>`;
+  if(!scheduled&&(!d.confirmed||d.confirmedSignature!==approvalSignature(t)))items.push('최종 본문과 대상을 확인해주세요.');
+  return `<section id="send-readiness" class="send-readiness" aria-live="polite"><strong>${scheduled?'초안 준비 상태':items.length?'보내기 전에 확인할 일':'보내기 예시 준비됨'}</strong>${items.length?`<ul>${items.map(item=>`<li>${escapeHtml(item)}</li>`).join('')}</ul>`:''}</section>`;
 }
 function refreshSendReadiness(t){const target=$('#send-readiness');if(target)target.outerHTML=sendReadinessMarkup(t);}
 function updateApproval(t) {
-  const d=getDraft(t);$('#send-confirm').checked=d.confirmed;$('#confirmation-label').textContent=confirmationLabel(d);$('#send-button').disabled=!canSend(t);$('#send-button').innerHTML=escapeHtml(sendLabel(t))+' '+icon('arrow');refreshNoticeSummary(t);refreshNoticeUndo(t);refreshNoticeGenerationPreview(t);refreshDirectBodyReview(t);scheduleCloudSave(t);refreshSendReadiness(t);
+  const d=getDraft(t);$('#send-confirm').checked=d.confirmed;$('#send-confirm').disabled=ticketState(t)!=='pending';$('#confirmation-label').textContent=confirmationLabel(d);$('#send-button').disabled=!canSend(t);$('#send-button').innerHTML=escapeHtml(sendLabel(t))+' '+icon('arrow');refreshNoticeSummary(t);refreshNoticeUndo(t);refreshNoticeGenerationPreview(t);refreshDirectBodyReview(t);scheduleCloudSave(t);refreshSendReadiness(t);
 }
 function updateRecipients(t) {
   $('#recipient-settings').innerHTML=recipientSettings(t);const all=$('#all-teams');if(all)all.indeterminate=getDraft(t).teams.length>0&&getDraft(t).teams.length<TEAMS.length;filterRecipientRows();updateApproval(t);
@@ -1120,7 +1129,7 @@ function filterRecipientRows() {
 function render() {
   disposeDocumentImport?.();disposeDocumentImport=null;
   const r=route();renderNavigation(r);
-  $('#content').innerHTML=r.view==='home'?home():r.view==='projects'?projectsPage():r.view==='project'?projectPage(r.id):r.view==='edit-project'?projectFormPage(r.id):r.view==='history'?historyPage():reviewPage(r.id);
+  $('#content').innerHTML=r.view==='home'?home():r.view==='projects'?projectsPage():r.view==='trash'?trashPage():r.view==='project'?projectPage(r.id):r.view==='edit-project'?projectFormPage(r.id):r.view==='history'?historyPage():reviewPage(r.id);
   if(r.view==='history')$('#history-project')?.closest('.field')?.insertAdjacentHTML('afterend',`<div class="field"><label for="history-source">기록 종류</label><select id="history-source"><option value="all" ${historySourceFilter==='all'?'selected':''}>전체</option><option value="manual" ${historySourceFilter==='manual'?'selected':''}>직접 추가</option><option value="simulated" ${historySourceFilter==='simulated'?'selected':''}>보내기 예시</option><option value="sample" ${historySourceFilter==='sample'?'selected':''}>예시 기록</option></select></div>`);
   if(r.view==='project')filterRoster();
   if(r.view==='edit-project'){
@@ -1148,6 +1157,10 @@ function render() {
   }
   if(r.view==='review'){
     const t=getTicket(r.id),d=getDraft(t),all=$('#all-teams');
+    if(ticketState(t)==='scheduled'){
+      $('.notice-card')?.insertAdjacentHTML('beforebegin','<section class="project-review" role="status"><h2>예정된 안내의 초안</h2><p class="help">지금은 초안과 대상을 미리 준비할 수 있어요. 예정 시각에 신청 현황을 다시 확인한 뒤 보내기를 결정해주세요.</p></section>');
+      $('#send-confirm').disabled=true;
+    }
     if(needsDeadlineReview(t))$('.notice-card')?.insertAdjacentHTML('beforebegin','<section class="project-review" role="alert"><h2>신청 마감이 지났습니다</h2><p>프로젝트의 마감 시각을 다시 확인하기 전에는 이 신청 안내를 실행할 수 없습니다.</p></section>');
     if(cloudUser&&!cloudState[t.id]){setCloudState(t,'pending');void refreshCloudDraft(t);}
     if(all)all.indeterminate=d.teams.length>0&&d.teams.length<TEAMS.length;
@@ -1187,7 +1200,7 @@ function renderHistoryDialog() {
 }
 function newHistory(projectId) {
   historyContext={id:null,edit:true,origin:document.activeElement};
-  const projectOptions=PROJECTS.map(p=>`<option value="${p.id}" ${p.id===projectId?'selected':''}>${p.name}</option>`).join('');
+  const projectOptions=PROJECTS.filter(visibleProject).map(p=>`<option value="${p.id}" ${p.id===projectId?'selected':''}>${p.name}</option>`).join('');
   $('#history-dialog').innerHTML=`${dialogHeading('안내 기록 추가','이전에 보낸 안내를 원문 또는 Slack 링크로 남겨요.','보낸 안내')}<form id="new-history-form"><div class="dialog-body"><div class="field"><label for="record-project">프로젝트</label><select id="record-project">${projectOptions}</select></div><div class="field"><label for="record-title">안내 제목</label><input type="text" id="record-title" required maxlength="160" placeholder="예: 워크숍 첫 공지"></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:15px"><div class="field"><label for="record-date">보낸 날짜와 시각</label><input type="datetime-local" id="record-date" required value="${checkedAt()}" style="width:100%;border:1px solid #dde4de;border-radius:7px;padding:10px;font-size:11px"></div><div class="field"><label for="record-route">보낸 곳</label><input type="text" id="record-route" required maxlength="200" placeholder="예: #전체-공지 또는 DM 20명"></div></div><div class="field"><label for="record-body">안내 원문</label><textarea id="record-body" maxlength="20000" placeholder="실제로 보낸 안내 내용을 붙여넣어주세요."></textarea></div><div class="field" style="margin:0"><label for="record-url">Slack 메시지 링크</label><input id="record-url" type="url" maxlength="2000" placeholder="https://워크스페이스.slack.com/archives/…"><p class="help">원문 또는 Slack 메시지 링크 중 하나 이상을 넣어주세요.</p></div><p id="history-error" class="error-message" role="alert" hidden></p></div><div class="dialog-footer"><span class="help">기록을 추가해도 메시지가 전송되지는 않아요.</span><button type="submit" class="button primary">안내 기록 저장</button></div></form>`;
   $('#record-project').closest('.field').insertAdjacentHTML('afterend','<div class="field"><label for="record-kind">안내 종류</label><select id="record-kind"><option value="initial">최초 공지</option><option value="reminder">리마인드 알림</option></select></div>');
   $('#history-dialog').showModal();
@@ -1241,6 +1254,7 @@ function dmPreviewTargets(p,a) {
   return `<p class="preview-target-summary">개별 DM ${c.total}명 · 필수 ${c.required}명 · 자율 ${c.voluntary}명${c.outside?` · 대상 외 ${c.outside}명`:''}</p><p class="preview-target-breakdown">미신청 ${c.pending}명 · 확정 대기 ${c.applied}명 · 확정 ${c.confirmed}명</p><div class="preview-recipient-groups">${groups.map(group=>`<section class="preview-recipient-group"><h4>${group.label} · ${group.people.length}명</h4><ul>${group.people.map(e=>`<li><strong>${escapeHtml(e.name)}</strong><span>${escapeHtml(TEAMS.find(team=>team.id===e.team)?.name||'팀 정보 없음')} · ${group.label}</span></li>`).join('')}</ul></section>`).join('')}</div>`;
 }
 function openSendPreview(t) {
+  if(ticketState(t)!=='pending'){toast('예정 시각에는 신청 현황을 다시 확인한 뒤 보내기를 결정해주세요.');return;}
   sendPreflightErrors.delete(t.id);
   const d=getDraft(t),p=getProject(t.project),a=audience(p,d);
   if(!d.body.trim()){toast('메시지 본문을 입력해주세요.');return;}
@@ -1260,6 +1274,7 @@ function closeSendPreview() {
 function confirmSendPreview() {
   if(!previewContext||!$('#preview-ack').checked)return;
   const t=getTicket(previewContext.ticketId),d=getDraft(t);
+  if(ticketState(t)!=='pending'){closeSendPreview();toast('티켓 상태가 바뀌었습니다. 신청 현황을 다시 확인해주세요.');return;}
   if(approvalSignature(t)!==previewContext.signature){closeSendPreview();toast('본문이나 대상이 바뀌었어요. 다시 확인해주세요.');return;}
   try{
     d.confirmedSourceSnapshot=getProject(t.project).dataKind==='sheet'?projectSendSnapshot(getProject(t.project),EMPLOYEES,applications):'';
@@ -1341,6 +1356,14 @@ async function simulateSend(t) {
   }finally{sendPreflightBusy=false;if(route().view==='review'&&route().id===t.id)render();}
 }
 
+function openTrashDialog(project){
+  const ticketCount=projectTickets(project.id).length,recordCount=projectRecords(project.id).length;
+  const dialog=$('#trash-dialog');
+  dialog.dataset.projectId=project.id;
+  dialog.innerHTML=`<div class="dialog-heading"><div><p class="eyebrow">프로젝트 관리</p><h2 id="trash-dialog-title">휴지통으로 이동할까요?</h2><p>${escapeHtml(project.name)}</p></div><button class="button icon-button" data-action="close-trash" aria-label="창 닫기">${icon('close')}</button></div><div class="dialog-body"><p>티켓 ${ticketCount}건과 안내 기록 ${recordCount}건, 신청 현황·초안이 일반 화면에서 함께 숨겨집니다.</p><p class="help">휴지통에서 프로젝트와 연결된 내용을 다시 복원할 수 있습니다.</p></div><div class="dialog-footer"><button class="button" data-action="close-trash">돌아가기</button><button class="button primary" data-action="confirm-trash-project">휴지통으로 이동</button></div>`;
+  dialog.showModal();
+}
+function closeTrashDialog(){if($('#trash-dialog').open)$('#trash-dialog').close();}
 document.addEventListener('click',event=>{
   const fileLink=event.target.closest('[data-open-file]');
   if(fileLink){
@@ -1404,6 +1427,37 @@ document.addEventListener('click',event=>{
   if(button.dataset.removeChannel&&t){const d=getDraft(t);d.channels=d.channels.filter(id=>id!==button.dataset.removeChannel);d.confirmed=false;updateRecipients(t);return;}
   if(button.dataset.recipientsPage&&t){recipientPage+=Number(button.dataset.recipientsPage);$('#recipient-list').innerHTML=recipientTable(audience(getProject(t.project),getDraft(t)).list,getProject(t.project));return;}
   switch(button.dataset.action){
+    case 'trash-project':{
+      const project=getProject(button.dataset.project);
+      if(!project||project.dataKind!=='local'||!visibleProject(project))break;
+      if(!requireOperator())break;
+      if(operatorConflict){toast('운영 정보 충돌을 먼저 해결해주세요.');break;}
+      openTrashDialog(project);
+      break;
+    }
+    case 'confirm-trash-project':{
+      const project=getProject($('#trash-dialog').dataset.projectId);
+      if(!project||project.dataKind!=='local'||!visibleProject(project))break;
+      if(!requireOperator())break;
+      if(operatorConflict){toast('운영 정보 충돌을 먼저 해결해주세요.');break;}
+      closeTrashDialog();
+      project.trashedAt=new Date().toISOString();
+      historyFilter='all';persist();location.hash='#trash';render();
+      toast('프로젝트를 휴지통으로 옮겼어요. 상단에서 서버 저장 완료를 확인해주세요.');
+      break;
+    }
+    case 'close-trash':closeTrashDialog();break;
+    case 'restore-project':{
+      const project=getProject(button.dataset.project);
+      if(!project?.trashedAt||project.dataKind!=='local')break;
+      if(!requireOperator())break;
+      if(operatorConflict){toast('운영 정보 충돌을 먼저 해결해주세요.');break;}
+      delete project.trashedAt;
+      persist();location.hash=`#project/${encodeURIComponent(project.id)}`;render();
+      toast('프로젝트와 연결된 자료를 복원했어요. 상단에서 서버 저장 완료를 확인해주세요.');
+      void refreshOfficialCalendarAndTickets();
+      break;
+    }
     case 'open-registration-summary':openRegistrationSummary($('#project-form'));break;
     case 'close-registration-summary':closeRegistrationSummary();break;
     case 'confirm-project-save':{const form=$('#project-form');closeRegistrationSummary(false);if(form?.reportValidity())commitProjectForm(form);break;}
@@ -1523,6 +1577,7 @@ document.addEventListener('submit',event=>{if(event.target.id==='cloud-login-for
 $('#history-dialog').addEventListener('cancel',event=>{event.preventDefault();closeHistory();});
 $('#cancel-dialog').addEventListener('cancel',event=>{event.preventDefault();closeCancel();});
 $('#registration-summary-dialog').addEventListener('cancel',event=>{event.preventDefault();closeRegistrationSummary();});
+$('#trash-dialog').addEventListener('cancel',event=>{event.preventDefault();closeTrashDialog();});
 $('#send-preview-dialog').addEventListener('cancel',event=>{event.preventDefault();closeSendPreview();});
 $('#cloud-dialog').addEventListener('cancel',event=>{event.preventDefault();closeCloudDialog();});
 $('#ticket-dialog').addEventListener('cancel',event=>{event.preventDefault();closeTicketDecision();});

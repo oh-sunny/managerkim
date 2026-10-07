@@ -1,6 +1,43 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {configureSupabase,signInSupabase,signOutSupabase,restoreSupabaseUser,accessToken,readOperatorState,uploadNoticeResource} from '../prototype/supabase-browser.js';
+import {configureSupabase,signInSupabase,signOutSupabase,restoreSupabaseUser,accessToken,readOperatorState,readDraft,saveDraft,uploadNoticeResource} from '../prototype/supabase-browser.js';
+import {draftStorageId} from '../prototype/draft-storage-id.js';
+
+test('generated ticket IDs use a stable database-safe draft ID without changing existing IDs', async t => {
+  const previousFetch=globalThis.fetch,previousStorage=globalThis.sessionStorage;
+  globalThis.sessionStorage={getItem:()=>null,setItem:()=>{},removeItem:()=>{}};
+  t.after(()=>{globalThis.fetch=previousFetch;globalThis.sessionStorage=previousStorage;});
+  const ticketId='local-74eaa826-7e76-4b74-9470-1b05437bd6b9:initial:2026-10-07T11:53:03.400Z';
+  const storedId=await draftStorageId(ticketId);
+  assert.match(storedId,/^[a-zA-Z0-9-]{1,100}$/);
+  assert.equal(await draftStorageId(ticketId),storedId);
+  assert.equal(await draftStorageId('health-final'),'health-final');
+  assert.match(await draftStorageId(`티켓:${'x'.repeat(150)}`),/^[a-zA-Z0-9-]{1,100}$/);
+  const records=new Map(),calls=[];
+  globalThis.fetch=async (url,options={}) => {
+    calls.push({url:String(url),options});
+    if(String(url).includes('/auth/v1/token?grant_type=password'))return Response.json({
+      access_token:'user-access',refresh_token:'user-refresh',expires_at:Math.floor(Date.now()/1000)+3600,
+      user:{id:'operator-1',email:'operator@example.com'},
+    });
+    if(String(url).endsWith('/rest/v1/rpc/save_notice_draft')){
+      const input=JSON.parse(options.body);
+      if(!/^[a-zA-Z0-9-]{1,100}$/.test(input.p_id))return Response.json({message:'invalid_draft'},{status:400});
+      const record={id:input.p_id,payload:input.p_payload,version:1,updated_at:'2026-10-07T12:00:00Z'};
+      records.set(record.id,record);return Response.json(record);
+    }
+    if(String(url).includes('/rest/v1/notice_drafts?')){
+      const id=new URL(String(url)).searchParams.get('id')?.slice(3);
+      return Response.json(records.has(id)?[records.get(id)]:[]);
+    }
+    return new Response(null,{status:404});
+  };
+  configureSupabase({supabaseUrl:'https://example.supabase.co',publishableKey:'sb_publishable_public'});
+  await signInSupabase('operator@example.com','password');
+  assert.equal((await saveDraft(ticketId,0,{body:'검진 초안'})).id,storedId);
+  assert.equal((await readDraft(ticketId)).payload.body,'검진 초안');
+  assert.equal(calls.find(call=>call.url.endsWith('/rest/v1/rpc/save_notice_draft')).options.headers.Authorization,'Bearer user-access');
+});
 
 test('browser login reads operator state directly from Supabase with the user token', async t => {
   const previousFetch=globalThis.fetch,previousStorage=globalThis.sessionStorage;
