@@ -39,6 +39,7 @@ const assets = new Map([
   ['/document-import.css', ['document-import.css', 'text/css; charset=utf-8']],
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/supabase-browser.js', ['supabase-browser.js', 'text/javascript; charset=utf-8']],
+  ['/draft-storage-id.js', ['draft-storage-id.js', 'text/javascript; charset=utf-8']],
   ['/data.js', ['data.js', 'text/javascript; charset=utf-8']],
   ['/rule-engine.js', ['rule-engine.js', 'text/javascript; charset=utf-8']],
   ['/registration-summary.js', ['registration-summary.js', 'text/javascript; charset=utf-8']],
@@ -77,7 +78,7 @@ const server = createServer(async (req, res) => {
   const asset = assets.get(pathname);
   if (!asset) { res.writeHead(404); res.end('Not found'); return; }
   try {
-    const html = await readFile(new URL(`../prototype/${asset[0]}`, import.meta.url));
+    const html = await readFile(new URL(`../web/${asset[0]}`, import.meta.url));
     res.writeHead(200, {
       'Content-Type': asset[1],
       'Content-Length': html.length,
@@ -88,7 +89,7 @@ const server = createServer(async (req, res) => {
   } catch (error) {
     console.error(`정적 파일 제공 실패: ${pathname} (${error.code ?? error.message})`);
     res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end(`요청한 파일을 읽지 못했습니다: ${pathname}. 실행 폴더의 prototype 파일을 확인해주세요.`);
+    res.end(`요청한 파일을 읽지 못했습니다: ${pathname}. web 폴더의 파일을 확인해주세요.`);
   }
 });
 
@@ -98,4 +99,4 @@ server.on('error', error => {
     : error.message);
   process.exitCode = 1;
 });
-server.listen(port, '127.0.0.1', () => console.log(`Prototype ready: http://localhost:${port}`));
+server.listen(port, '127.0.0.1', () => console.log(`Web app ready: http://localhost:${port}`));

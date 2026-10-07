@@ -1,10 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {prepareNoticeDraft,compareDraftProject,restoreNoticeDraft,acceptProjectReview,acceptNoticeCandidate} from '../prototype/notice-draft.js';
-import {makeNoticeResource,reviseNoticeResource,selectNoticeResources,latestProjectResources,snapshotSimulatedNotice} from '../prototype/notice-resources.js';
-import {createNoticeResourceStore,resourceToRow,resourceFromRow} from '../prototype/notice-resource-store.js';
+import {prepareNoticeDraft,compareDraftProject,restoreNoticeDraft,acceptProjectReview,acceptNoticeCandidate,noticePurposeForTicket} from '../web/notice-draft.js';
+import {makeNoticeResource,reviseNoticeResource,selectNoticeResources,latestProjectResources,snapshotSimulatedNotice} from '../web/notice-resources.js';
+import {createNoticeResourceStore,resourceToRow,resourceFromRow} from '../web/notice-resource-store.js';
 
 const project={name:'건강검진',audience:'전 직원',requirements:'검진기관을 선택해 신청',deadlineAt:'2026-10-16T18:00',applicationUrl:'https://example.org/apply'};
+
+test('scheduled rule checkpoints start with a reminder purpose, while first and final notices stay distinct',()=>{
+  assert.equal(noticePurposeForTicket({kind:'initial',title:'첫 안내 준비',purpose:'첫 안내'}),'initial');
+  assert.equal(noticePurposeForTicket({kind:'voluntary',title:'자율 신청 현황 확인',purpose:'D-3',triggers:['D-3']}),'reminder');
+  assert.equal(noticePurposeForTicket({kind:'required',title:'필수 대상 신청 현황 확인',purpose:'D-1',triggers:['D-1']}),'reminder');
+  assert.equal(noticePurposeForTicket({kind:'required',title:'마감 직전 확인',purpose:'마감 4시간 전',triggers:['deadline-4h']}),'deadline');
+});
 
 test('new notice uses current project and an old draft preserves its work for explicit review',()=>{
   const saved=prepareNoticeDraft(project,{body:'제가 고친 본문',purpose:'initial',resources:[{id:'old-file'}],recipientIds:[1]});

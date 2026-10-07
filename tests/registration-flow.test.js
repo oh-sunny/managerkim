@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildRegistrationSummary} from '../prototype/registration-summary.js';
-import {evaluateFirstNoticeTicket, evaluateReminderCheckpoints} from '../prototype/rule-engine.js';
+import {buildRegistrationSummary} from '../web/registration-summary.js';
+import {evaluateFirstNoticeTicket, evaluateReminderCheckpoints} from '../web/rule-engine.js';
 
 const project = {
   id: 'new-event', name: '가을 행사', createdAt: '2026-10-07T01:00:00.000Z',

@@ -15,7 +15,7 @@
 | `fixtures/data/`의 `projects.json`, `applications.json` | 프로젝트별 대상·필수 명단과 신청·확정 대기·취소 상태 |
 | `fixtures/data/`의 `cases.json`, `fact-sources.json`, `expected-extraction.json` | 건별 기대 사실, 근거 문서와 원문 인용, 구버전 충돌 |
 | `fixtures/data/gold-notices.json` | 사람이 검토할 자연스러운 공지 예시. 정확한 문장 일치 검사용이 아님 |
-| `fixtures.test.js` | 현재 프로토타입의 인원 계산·링크 반영과 자료 자체의 무결성 검증 |
+| `fixtures.test.js` | 현재 웹앱의 인원 계산·링크 반영과 자료 자체의 무결성 검증 |
 | `tools/notice-contract.mjs`, `tools/evaluate-notice.mjs` | 새 초안의 링크·마감·오래된 정보 검사 |
 | `tools/build_fixtures.py` | `fixtures/` 아래 문서·텍스트와 기본 JSON 생성 |
 
@@ -45,4 +45,4 @@
 
 ## 범위
 
-현재 프로토타입은 여러 PDF·DOCX·TXT·MD를 Gemini로 분석하고 스캔 PDF OCR, 근거 검사, 누락·충돌 검토 후 선택 적용을 지원한다. 확인한 공지 정보 카드로 Gemini 초안도 생성한다. `document-analysis.test.js`는 혼합 문서 읽기·이미지 전용 PDF·OCR 결과·허위 인용·날짜 형식·오류 경계를 검증하고, `notice-generation.test.js`는 행동·방법·비용·예외 분리, 카드 근거와 충돌 상태, 미확인 사실 차단, 네 사례의 마감·링크 보존, 안내 목적별 규칙을 확인한다. `send-preflight.test.js`는 승인 후 신청·취소·확정·대상·팀 변경과 조회 실패를 모의 발송 직전 차단하는 판단을 확인한다. `supabase-api.test.js`는 인증·동일 출처·요청 크기·동시 호출을 확인한다. 자동 테스트는 외부 AI를 호출하지 않는다. 2026-10-06에는 가상 건강검진 카드로 실제 Gemini 생성·의미 검증 요청 1회를 통과했으며, 네 사례의 실제 생성 문장 품질 평가는 남았다. 기존 화면의 초기 160명은 같은 ID·팀 순서의 예시 명단이지만 이름 표시와 프로젝트 초기값은 이 폴더의 사례와 별개다.
+현재 웹앱은 여러 PDF·DOCX·TXT·MD를 Gemini로 분석하고 스캔 PDF OCR, 근거 검사, 누락·충돌 검토 후 선택 적용을 지원한다. 확인한 공지 정보 카드로 Gemini 초안도 생성한다. `document-analysis.test.js`는 혼합 문서 읽기·이미지 전용 PDF·OCR 결과·허위 인용·날짜 형식·오류 경계를 검증하고, `notice-generation.test.js`는 행동·방법·비용·예외 분리, 카드 근거와 충돌 상태, 미확인 사실 차단, 네 사례의 마감·링크 보존, 안내 목적별 규칙을 확인한다. `send-preflight.test.js`는 승인 후 신청·취소·확정·대상·팀 변경과 조회 실패를 모의 발송 직전 차단하는 판단을 확인한다. `supabase-api.test.js`는 인증·동일 출처·요청 크기·동시 호출을 확인한다. 자동 테스트는 외부 AI를 호출하지 않는다. 2026-10-06에는 가상 건강검진 카드로 실제 Gemini 생성·의미 검증 요청 1회를 통과했으며, 네 사례의 실제 생성 문장 품질 평가는 남았다. 기존 화면의 초기 160명은 같은 ID·팀 순서의 예시 명단이지만 이름 표시와 프로젝트 초기값은 이 폴더의 사례와 별개다.

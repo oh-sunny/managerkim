@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {sheetSyncResponseNotice,sheetSyncRunNotice} from '../prototype/sheet-sync-feedback.js';
+import {sheetSyncResponseNotice,sheetSyncRunNotice} from '../web/sheet-sync-feedback.js';
 
 test('a saved Sheet snapshot and deferred legacy first notices stay distinct in the response and run history',()=>{
   const response={status:'success',sourceStatus:'success',firstNoticeSkippedCount:3,blockedDecisions:3};

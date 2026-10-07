@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {quickRecipientSelection,recipientGroups,recipientCounts,recipientGroupLabel} from '../prototype/recipient-selection.js';
+import {quickRecipientSelection,recipientGroups,recipientCounts,recipientGroupLabel} from '../web/recipient-selection.js';
 
 const people=Array.from({length:8},(_,index)=>({id:index+1,name:`동료 ${index+1}`}));
 const status={targetIds:[1,2,3,4,5,6,7],requiredIds:[1,2,3,4],requiredPendingIds:[1,2],appliedIds:[3,4,6,7],confirmedIds:[4,7],pendingIds:[1,2,5]};

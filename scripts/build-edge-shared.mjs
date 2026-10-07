@@ -9,7 +9,7 @@ for(const [source,name] of [
   ['scripts/application-source.mjs','application-source.mjs'],
   ['scripts/google-sheets-source.mjs','google-sheets-source.mjs'],
   ['scripts/public-holidays.mjs','public-holidays.mjs'],
-  ['prototype/data.js','data.js'],
-  ['prototype/rule-engine.js','rule-engine.js'],
-  ['prototype/sheet-application-merge.js','sheet-application-merge.js'],
+  ['web/data.js','data.js'],
+  ['web/rule-engine.js','rule-engine.js'],
+  ['web/sheet-application-merge.js','sheet-application-merge.js'],
 ]) copyFileSync(join(root,source),join(target,name));

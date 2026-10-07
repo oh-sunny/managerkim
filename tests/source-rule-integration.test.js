@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {normalizeApplicationSource} from '../scripts/application-source.mjs';
-import {evaluateReminderTickets} from '../prototype/rule-engine.js';
+import {evaluateReminderTickets} from '../web/rule-engine.js';
 
 test('Google Sheet history normalization feeds reminder decisions and retires resolved tickets', () => {
   const project = {

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { readDocuments, applyOcr } from '../scripts/document-reader.mjs';
 import { evidenceIndex, parseModelJson, validateAnalysis, createDocumentAnalyzer } from '../scripts/document-analysis.mjs';
-import { applicableValue } from '../prototype/analysis-contract.js';
+import { applicableValue } from '../web/analysis-contract.js';
 import { scannedPdf } from './helpers/scanned-pdf.mjs';
 
 const textFile = (name,text) => ({name,data:Buffer.from(text).toString('base64')});

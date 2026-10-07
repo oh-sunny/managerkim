@@ -1,4 +1,5 @@
 // Browser-side Supabase Auth and PostgREST. Only the publishable key is exposed.
+import {draftStorageId} from './draft-storage-id.js';
 const SESSION_KEY = 'office-benefits-supabase-session-v1';
 let base = '';
 let publishableKey = '';
@@ -157,15 +158,17 @@ export async function readDrafts() {
 }
 
 export async function readDraft(id) {
-  const rows = await supabaseRequest(`/rest/v1/notice_drafts?id=eq.${encodeURIComponent(id)}&select=id,payload,version,updated_at&limit=1`);
+  const storedId = await draftStorageId(id);
+  const rows = await supabaseRequest(`/rest/v1/notice_drafts?id=eq.${encodeURIComponent(storedId)}&select=id,payload,version,updated_at&limit=1`);
   if (!rows[0]) throw Object.assign(new Error('저장된 초안이 없습니다.'), {status: 404});
   return rows[0];
 }
 
 export async function saveDraft(id, expectedVersion, data) {
   try {
+    const storedId = await draftStorageId(id);
     return await supabaseRequest('/rest/v1/rpc/save_notice_draft', {
-      method: 'POST', body: {p_id: id, p_expected_version: expectedVersion, p_payload: data},
+      method: 'POST', body: {p_id: storedId, p_expected_version: expectedVersion, p_payload: data},
     });
   } catch (error) {
     if (error.message === 'draft_conflict') {

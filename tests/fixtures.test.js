@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import {readFileSync, statSync} from 'node:fs';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {calculateStatus, applicationBreakdown, setApplication} from '../prototype/data.js';
-import {extractProjectCandidates} from '../prototype/document-extract.js';
-import {buildDraftMessage} from '../prototype/message-templates.js';
+import {calculateStatus, applicationBreakdown, setApplication} from '../web/data.js';
+import {extractProjectCandidates} from '../web/document-extract.js';
+import {buildDraftMessage} from '../web/message-templates.js';
 import {evaluateNotice} from './tools/notice-contract.mjs';
 
 const root = fileURLToPath(new URL('./fixtures/', import.meta.url));
@@ -112,7 +112,7 @@ test('every expected extracted field has verbatim evidence in its named source d
   }
 });
 
-test('prototype template retains the exact application link for all scenarios', () => {
+test('notice template retains the exact application link for all scenarios', () => {
   for (const c of cases) {
     const draft = buildDraftMessage({title:c.name, deadline:c.deadlineAt, owner:c.owner, applicationUrl:c.applicationUrl});
     assert.ok(draft.includes(c.applicationUrl), c.id);

@@ -21,7 +21,7 @@ test('development server serves the complete browser module graph and bundled fo
       child.once('error', error => {clearTimeout(timeout); reject(error);});
       child.once('exit', code => {clearTimeout(timeout); reject(new Error(`Server exited: ${code}`));});
       child.stdout.on('data', chunk => {
-        if (chunk.toString().includes('Prototype ready:')) {clearTimeout(timeout); resolve();}
+        if (chunk.toString().includes('Web app ready:')) {clearTimeout(timeout); resolve();}
       });
     });
     const origin = `http://127.0.0.1:${port}`;

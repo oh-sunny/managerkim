@@ -2,6 +2,108 @@
 
 여러 행사와 복지 제도의 **신청 현황·일정·이전 안내를 함께 확인하고, 다음 안내를 준비하는 웹 도구**입니다. 담당자가 내용과 대상을 검토해 승인한 뒤 발송하고 결과를 다시 확인하는 흐름을 목표로 합니다. 현재 실제 Slack 발송은 구현되지 않았습니다.
 
+## 저장소 구성
+
+화면을 수정할 때는 `web/`, 서버 API는 `scripts/supabase-api.mjs`, 다음 구현 작업은 `docs/PLAN.md`부터 확인합니다. 아래 `#` 뒤는 각 경로의 역할을 설명하는 주석입니다.
+
+```text
+저장소 루트/
+├─ README.md                        # 실행 방법과 폴더 구조의 시작점
+├─ package.json                     # 실행 명령과 직접 사용하는 npm 패키지 목록
+├─ package-lock.json                # 설치 버전 고정; node_modules와 달리 보관할 파일
+├─ vercel.json                      # Vercel 정적 화면 경로와 API 라우팅
+├─ .env                             # 로컬 연결 설정·키; Git 제외
+├─ .env.example                     # 필요한 환경 변수의 예시; 실제 키 없음
+├─ .gitignore                       # 비밀 설정·설치물·임시 자료의 Git 제외 규칙
+├─ .gitattributes                   # Git 파일 처리 규칙
+│
+├─ web/                       # 현재 실행·배포하는 프런트엔드
+│  ├─ index.html                    # 화면 진입점; app.js와 styles.css 로드
+│  ├─ app.js                        # 화면·예시 데이터·상태 저장·API 호출 연결
+│  ├─ draft-storage-id.js           # 화면 티켓 ID를 서버 초안 저장 ID로 변환
+│  ├─ styles.css                    # 화면 스타일
+│  ├─ data.js                       # 신청 인원·대상 계산과 티켓 정렬
+│  ├─ document-extract.js           # TXT·MD 텍스트에서 운영 정보 후보 추출
+│  ├─ analysis-contract.js          # 자료 분석의 필드·용량 제한·값 검증 규칙
+│  ├─ document-import.js            # 자료 분석 결과를 등록 화면에 연결
+│  ├─ message-templates.js          # 공지 초안 템플릿
+│  └─ rule-engine.js                # 규칙 기반 티켓 평가; 새 프로젝트의 화면 티켓에 연결
+│
+├─ api/                             # Vercel 서버 함수 진입점
+│  └─ index.js                      # 요청을 scripts/supabase-api.mjs로 전달
+├─ scripts/                         # 로컬 실행 도구와 서버 모듈이 함께 있는 폴더
+│  ├─ dev-server.mjs                # npm run dev; 정적 파일과 /api 요청 처리
+│  ├─ supabase-api.mjs              # 로컬·Vercel 공용 로그인·초안·자료 저장 API
+│  ├─ document-reader.mjs           # PDF·DOCX·텍스트 자료 읽기
+│  ├─ document-analysis.mjs         # 자료 분석 요청과 AI 결과 처리
+│  ├─ application-source.mjs        # 대상 명단·신청 이력 정규화; Sheets 가져오기에서 사용
+│  ├─ google-sheets-source.mjs      # Google Sheets 네 탭 읽기·정규화
+│  ├─ google-sheets-service.mjs     # 서버용 읽기 전용 서비스 계정 인증
+│  └─ gemini-smoke.mjs               # npm run test:gemini; 가상 자료로 외부 API 연결 확인
+├─ supabase/
+│  ├─ migrations/                  # DB 테이블·접근 정책·저장소 변경 이력
+│  └─ functions/                   # 화면 밖 Sheets 동기화 Edge Function
+│
+├─ tests/                           # 자동 테스트·입력 자료·평가 도구를 한곳에 보관
+│  ├─ README.md                     # 테스트 구조·자료 재생성 방법·평가 기준
+│  ├─ data.test.js                  # 신청 현황 계산·정렬
+│  ├─ document-extract.test.js      # 텍스트 후보 추출
+│  ├─ document-analysis.test.js     # 문서 읽기·분석 결과와 근거 검증
+│  ├─ message-templates.test.js     # 공지 템플릿
+│  ├─ rule-engine.test.js           # 규칙 기반 티켓 평가
+│  ├─ application-source.test.js    # 신청 원본 정규화·시트 어댑터
+│  ├─ source-rule-integration.test.js # 신청 원본과 티켓 평가의 연결
+│  ├─ supabase-api.test.js          # Supabase API 처리
+│  ├─ fixtures.test.js              # 자료 무결성·사례별 기능 검증; npm test에 포함
+│  ├─ fixtures/                    # 테스트 입력과 기대 결과
+│  │  ├─ documents/                # PDF 6개·DOCX 6개; 테스트 입력 자료
+│  │  ├─ source_text/              # 문서 원문 TXT 12개; 추출 검증·정답 대조
+│  │  └─ data/                     # 직원·프로젝트·신청·기대 결과 등 JSON 8개
+│  └─ tools/                       # 자료 생성·공지 평가 도구
+│     ├─ build_fixtures.py          # fixtures/ 아래 문서·텍스트·기본 JSON 생성
+│     ├─ notice-contract.mjs        # 공지의 링크·마감·오래된 정보 검사 규칙
+│     └─ evaluate-notice.mjs        # 새 공지 JSON을 검사하는 CLI
+│
+├─ docs/                            # 기획·설계·조사·참고 자료
+│  ├─ PRD.md                        # 제품 목표와 요구사항
+│  ├─ PLAN.md                       # 구현 순서와 진행 상태
+│  ├─ data-architecture.md          # 데이터 흐름과 서버 저장 설계 초안
+│  ├─ REVIEW_SCREEN_REVISION.md     # 검토 화면 변경 이유와 논의 기록
+│  ├─ research_001.md               # 공개 사례 조사
+│  └─ references/                  # 공지 작성 참고 자료; 앱 실행 시 읽지 않음
+│     ├─ tone-guide.md              # 말투 기준
+│     └─ daangn-tone-references.csv  # 공개 문구와 출처
+├─ spec/                            # 기능별 상세 명세
+│  ├─ spec_001.md                   # 현재 구현 동작과 한계
+│  ├─ spec_002.md                   # 기획서 입력·대상 선택·자료·초안 추가 요구사항
+│  └─ spec_003.md                   # 등록·공지 화면 흐름과 인수 조건
+│
+├─ outputs/                         # 예시 Sheets 파일·생성 도구·미리보기; 운영 데이터 아님
+├─ 작업일지.md                       # 작업·검증 기록
+├─ AGENTS.md                        # 프로젝트 협업 규칙
+├─ .local-preview/                  # 로컬 조사 임시 파일; Git 제외
+├─ node_modules/                    # npm 설치 결과; Git 제외, 재설치 가능
+└─ .git/                            # Git 이력과 저장소 정보
+```
+
+### 실행 경로와 헷갈리기 쉬운 구분
+
+- **로컬 실행:** `npm run dev` → `scripts/dev-server.mjs` → `web/` 화면 제공. `/api/*`는 `scripts/supabase-api.mjs`가 처리합니다.
+- **Vercel 실행:** `vercel.json` → `web/` 화면 제공. `/api/*`는 `api/index.js`를 거쳐 같은 `scripts/supabase-api.mjs`를 사용합니다. 두 서버 진입점은 실행 환경이 달라 필요합니다.
+- **자동 테스트:** `npm test`로 `tests/` 아래 자동 테스트를 실행합니다. `fixtures.test.js`는 `fixtures/`의 입력·기대 결과와 `tools/notice-contract.mjs`를 사용합니다. `fixtures/documents/`와 `fixtures/source_text/`는 각각 파일 입력과 원문 대조에 필요합니다.
+- **자료 생성·공지 평가:** `python tests/tools/build_fixtures.py`로 자료를 생성하고, `node tests/tools/evaluate-notice.mjs candidate.json`으로 새 공지의 사실 관계를 검사합니다. 환경 요건과 자료 범위는 [테스트 README](tests/README.md)를 참고합니다.
+- **Sheets 가져오기와 규칙 티켓:** 화면은 `rule-engine.js`를 직접 사용합니다. 서버는 `google-sheets-source.mjs`와 `application-source.mjs`로 네 탭을 읽고 신청 이력을 정규화한 뒤 화면에 반환합니다. 세 모듈 모두 자동 테스트에서도 사용합니다.
+
+### 정리 후보
+
+`node_modules/`는 재생성 가능한 설치물입니다. 공간이 필요할 때 삭제 후 `npm ci`로 복원할 수 있지만, 앱·문서 처리·Gemini 연결 확인에 사용하는 패키지가 들어 있으므로 일반 작업 중에는 유지합니다. `package.json`과 `package-lock.json`도 함께 유지합니다.
+
+`pdfjs-dist`와 `yauzl`은 현재 `scripts/document-reader.mjs`에서 사용하므로 미사용 패키지로 분류하지 않습니다. 의존성 정리는 현재 코드의 참조를 기준으로 판단합니다.
+
+`tests/`, `supabase/migrations/`, `.env`, `.git/`는 테스트와 입력 자료, DB 재구성 이력, 로컬 연결 설정, 버전 이력을 각각 보관합니다. `outputs/`의 예시 Sheets·미리보기는 기능 검증과 재현에 사용하므로 유지하고, 다시 만들 수 있는 `.inspect.ndjson` 검사 출력만 Git에서 제외합니다.
+
+추가로 구조를 정리한다면 `scripts/`의 서버 모듈을 `server/`로 분리하고, `spec/`을 `docs/spec/`으로 합칠 수 있습니다. 실제 이동 시 import·문서 링크와 로컬·Vercel 실행 경로를 함께 수정해야 합니다.
+
 ## 왜 만들었나: 문제 정의
 
 인턴 업무를 돌아보며 **가장 번거로운 일을 더 편하게 할 수 없을까?** 생각했습니다. HR·총무 업무에서는 공지 문구를 작성한 뒤에도 신청해야 할 사람이 신청했는지, 신청률이 어떤지 틈틈이 확인해야 합니다. 이후 리마인드가 필요한 시점을 판단하고 다시 공지를 작성하며, 마감 뒤에는 명단을 확정합니다.
@@ -10,7 +112,7 @@
 
 ## 무엇을 만들었나
 
-목표 흐름은 **운영 정보 등록 → 신청 현황 확인 → 안내 필요 판단 → 초안·대상 검토 → 승인 후 발송 → 결과 저장·재확인**입니다. 현재 프로토타입에서는 프로젝트를 등록하고, 신청 원본과 일정에 따라 확인할 일을 만들고, 안내 문구·대상·자료를 검토해 **모의 발송 기록**까지 남길 수 있도록 구성했습니다.
+목표 흐름은 **운영 정보 등록 → 신청 현황 확인 → 안내 필요 판단 → 초안·대상 검토 → 승인 후 발송 → 결과 저장·재확인**입니다. 현재 웹앱에서는 프로젝트를 등록하고, 신청 원본과 일정에 따라 확인할 일을 만들고, 안내 문구·대상·자료를 검토해 **모의 발송 기록**까지 남길 수 있도록 구성했습니다.
 
 - Google Sheets의 직원·대상·신청 이력을 읽어 신청 현황을 계산합니다.
 - 마감일, 공휴일, 업무시간과 신청 현황을 기준으로 첫 안내·추가 안내의 검토 시점을 제안합니다.
@@ -52,15 +154,7 @@
 4. 다양한 실제 문서에서 AI 추출과 공지 문구의 품질을 평가하고, 운영자가 수정해야 하는 부담을 줄입니다.
 5. 실제 회사의 안내 문구를 참고해 말투와 정보 구성 기준을 정하고, 여러 공지에서 품질이 일관되는지 살펴봅니다.
 
-## 이 프로젝트를 하며 느낀 점
-
-처음에는 공지 문구 작성과 신청 현황 확인을 자동화하면 편하겠다고 생각했습니다. 총무 업무의 전체 흐름을 그려 보니 자동화하고 싶은 일이 계속 늘어났습니다. 이번에는 **반복해서 대조하고 안내를 준비하는 과정**에 집중해야 무엇을 먼저 완성하고 검증할지 분명해졌습니다.
-
-공지 초안도 ‘기획서 내용을 잘 요약하기’만으로는 충분하지 않다는 점을 정리했습니다. 안내를 받는 사람이 자신에게 해당하는지, 무엇을 언제까지 해야 하는지 바로 알 수 있어야 합니다. 이를 위해 운영 정보와 공지 문구를 구분하고, 정보가 바뀌면 초안도 다시 확인하는 구조가 중요하다고 봤습니다.
-
-또 신청 인원 계산과 안내 시점 제안은 설명 가능한 규칙으로 만들고, AI는 자료에서 후보를 찾거나 문장을 다듬는 데 쓰는 방향을 택했습니다. 앞으로는 실제 사용자 흐름과 문서 사례로 이 판단이 운영 부담을 줄이는지 확인하고 싶습니다.
-
-## 현재 프로토타입의 기능 상세
+## 현재 웹앱의 기능 상세
 
 HTML·CSS·JavaScript와 Node.js 정적 서버로 실행합니다. 현재 가능한 동작은 다음과 같습니다.
 
@@ -87,7 +181,7 @@ Node.js 22.13 이상이 필요합니다. 이 README와 `package.json`이 있는 
 npm run dev
 ```
 
-[프로토타입 열기](http://localhost:3000). 종료하려면 실행 중인 터미널에서 Ctrl+C를 누릅니다. 다른 포트가 필요하면 다음처럼 실행합니다.
+[웹앱 열기](http://localhost:3000). 종료하려면 실행 중인 터미널에서 Ctrl+C를 누릅니다. 다른 포트가 필요하면 다음처럼 실행합니다.
 
 ```powershell
 $env:PORT = '3001'
@@ -137,10 +231,10 @@ npm run dev
 
 ## Vercel 배포
 
-이 저장소는 [`vercel.json`](vercel.json)에서 정적 화면을 `prototype/`에서 제공하고, `/api/*` 요청을 [`api/index.js`](api/index.js) 함수로 연결합니다. 로컬 Node 서버를 Vercel에서 실행하지 않습니다.
+이 저장소는 [`vercel.json`](vercel.json)에서 정적 화면을 `web/`에서 제공하고, `/api/*` 요청을 [`api/index.js`](api/index.js) 함수로 연결합니다. 로컬 Node 서버를 Vercel에서 실행하지 않습니다.
 
 1. 이 저장소의 배포할 변경을 Git에 커밋하고 GitHub `main`에 푸시합니다. 로컬 `.env`는 Git에 포함하지 않습니다.
-2. Vercel에서 **Add New → Project**로 GitHub 저장소를 가져옵니다. Root Directory는 저장소 루트로 둡니다. `vercel.json`의 **Framework Preset: Other**, **Output Directory: prototype** 설정을 사용하고 별도 Build Command는 지정하지 않습니다.
+2. Vercel에서 **Add New → Project**로 GitHub 저장소를 가져옵니다. Root Directory는 저장소 루트로 둡니다. `vercel.json`의 **Framework Preset: Other**, **Output Directory: web** 설정을 사용하고 별도 Build Command는 지정하지 않습니다.
 3. Supabase를 사용할 경우 Vercel 프로젝트의 **Settings → Environment Variables**에 `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`를 Preview와 Production 환경용으로 입력합니다. 운영자 Auth 계정으로 로그인할 수 있어야 합니다. Gemini 분석·초안에는 `GEMINI_API_KEY`와 `GEMINI_MODEL`을 설정합니다. 공휴일 조회에는 별도 키가 필요하지 않습니다. Node.js는 22.13 이상(권장 24)으로 실행하며 환경 변수 변경 후 새 배포를 생성합니다.
 4. Preview 배포에서 화면과 `/api/status`를 확인합니다. Supabase 설정을 했다면 `{ "configured": true }`가 나와야 합니다. 로그인, 초안 저장, 파일 업로드도 확인한 뒤 Production에 배포합니다.
 
@@ -152,105 +246,12 @@ npm run dev
 - [PLAN 구현 계획](docs/PLAN.md): 단계별 작업·완료 기준·진행 상태와 다음 작업. 구현을 시작할 때 먼저 확인합니다.
 - [SPEC 현재 구현 명세](spec/spec_001.md): 실제 동작·한계와 기능별 구현 차이
 - [SPEC 002 기획서 입력·안내 준비](spec/spec_002.md): 문서에서 운영 정보 후보 추출, 필수 대상 빠른 선택, 안내 자료·초안 저장의 추가 요구사항
+- [SPEC 003 등록·공지 화면 흐름](spec/spec_003.md): 현재 통합 작업의 목표와 인수 조건
 - [공개 업무 조사](docs/research_001.md): 공개 사례·출처와 조사 당시의 제품 제안
 - [데이터 흐름과 저장 구조](docs/data-architecture.md): 파일·텍스트 입력, 분석 후보, 확정 정보, 공지 초안과 신청/안내 이력을 Supabase·API에 연결하는 설계 초안
 - [공지 초안 톤 가이드](docs/references/tone-guide.md): 말투 작성 기준과 [공개 레퍼런스](docs/references/daangn-tone-references.csv). 현재 앱에서 읽는 데이터가 아닌 작성 참고 자료입니다.
 - [테스트 구성과 평가 방법](tests/README.md): 자동 테스트, 가상 사례 자료, 문서 생성·공지 평가 도구
 
-## 저장소 구성
-
-화면을 수정할 때는 `prototype/`, 서버 API는 `scripts/supabase-api.mjs`, 다음 구현 작업은 `docs/PLAN.md`부터 확인합니다. 아래 `#` 뒤는 각 경로의 역할을 설명하는 주석입니다.
-
-```text
-저장소 루트/
-├─ README.md                        # 실행 방법과 폴더 구조의 시작점
-├─ package.json                     # 실행 명령과 직접 사용하는 npm 패키지 목록
-├─ package-lock.json                # 설치 버전 고정; node_modules와 달리 보관할 파일
-├─ vercel.json                      # Vercel 정적 화면 경로와 API 라우팅
-├─ .env                             # 로컬 연결 설정·키; Git 제외
-├─ .env.example                     # 필요한 환경 변수의 예시; 실제 키 없음
-├─ .gitignore                       # 비밀 설정·설치물·임시 자료의 Git 제외 규칙
-├─ .gitattributes                   # Git 파일 처리 규칙
-│
-├─ prototype/                       # 현재 실행·배포하는 프런트엔드
-│  ├─ index.html                    # 화면 진입점; app.js와 styles.css 로드
-│  ├─ app.js                        # 화면·예시 데이터·상태 저장·API 호출 연결
-│  ├─ styles.css                    # 화면 스타일
-│  ├─ data.js                       # 신청 인원·대상 계산과 티켓 정렬
-│  ├─ document-extract.js           # TXT·MD 텍스트에서 운영 정보 후보 추출
-│  ├─ analysis-contract.js          # 자료 분석의 필드·용량 제한·값 검증 규칙
-│  ├─ document-import.js            # 자료 분석 결과를 등록 화면에 연결
-│  ├─ message-templates.js          # 공지 초안 템플릿
-│  └─ rule-engine.js                # 규칙 기반 티켓 평가; 새 프로젝트의 화면 티켓에 연결
-│
-├─ api/                             # Vercel 서버 함수 진입점
-│  └─ index.js                      # 요청을 scripts/supabase-api.mjs로 전달
-├─ scripts/                         # 로컬 실행 도구와 서버 모듈이 함께 있는 폴더
-│  ├─ dev-server.mjs                # npm run dev; 정적 파일과 /api 요청 처리
-│  ├─ supabase-api.mjs              # 로컬·Vercel 공용 로그인·초안·자료 저장 API
-│  ├─ document-reader.mjs           # PDF·DOCX·텍스트 자료 읽기
-│  ├─ document-analysis.mjs         # 자료 분석 요청과 AI 결과 처리
-│  ├─ application-source.mjs        # 대상 명단·신청 이력 정규화; Sheets 가져오기에서 사용
-│  ├─ google-sheets-source.mjs      # Google Sheets 네 탭 읽기·정규화
-│  ├─ google-sheets-service.mjs     # 서버용 읽기 전용 서비스 계정 인증
-│  └─ gemini-smoke.mjs               # npm run test:gemini; 가상 자료로 외부 API 연결 확인
-├─ supabase/
-│  └─ migrations/                  # DB 테이블·접근 정책·저장소 변경 이력
-│     └─ 20261006015431_notice_drafts_and_resources.sql
-│
-├─ tests/                           # 자동 테스트·입력 자료·평가 도구를 한곳에 보관
-│  ├─ README.md                     # 테스트 구조·자료 재생성 방법·평가 기준
-│  ├─ data.test.js                  # 신청 현황 계산·정렬
-│  ├─ document-extract.test.js      # 텍스트 후보 추출
-│  ├─ document-analysis.test.js     # 문서 읽기·분석 결과와 근거 검증
-│  ├─ message-templates.test.js     # 공지 템플릿
-│  ├─ rule-engine.test.js           # 규칙 기반 티켓 평가
-│  ├─ application-source.test.js    # 신청 원본 정규화·시트 어댑터
-│  ├─ source-rule-integration.test.js # 신청 원본과 티켓 평가의 연결
-│  ├─ supabase-api.test.js          # Supabase API 처리
-│  ├─ fixtures.test.js              # 자료 무결성·사례별 기능 검증; npm test에 포함
-│  ├─ fixtures/                    # 테스트 입력과 기대 결과
-│  │  ├─ documents/                # PDF 6개·DOCX 6개; 테스트 입력 자료
-│  │  ├─ source_text/              # 문서 원문 TXT 12개; 추출 검증·정답 대조
-│  │  └─ data/                     # 직원·프로젝트·신청·기대 결과 등 JSON 8개
-│  └─ tools/                       # 자료 생성·공지 평가 도구
-│     ├─ build_fixtures.py          # fixtures/ 아래 문서·텍스트·기본 JSON 생성
-│     ├─ notice-contract.mjs        # 공지의 링크·마감·오래된 정보 검사 규칙
-│     └─ evaluate-notice.mjs        # 새 공지 JSON을 검사하는 CLI
-│
-├─ docs/                            # 기획·설계·조사·참고 자료
-│  ├─ PRD.md                        # 제품 목표와 요구사항
-│  ├─ PLAN.md                       # 구현 순서와 진행 상태
-│  ├─ data-architecture.md          # 데이터 흐름과 서버 저장 설계 초안
-│  ├─ research_001.md               # 공개 사례 조사
-│  └─ references/                  # 공지 작성 참고 자료; 앱 실행 시 읽지 않음
-│     ├─ tone-guide.md              # 말투 기준
-│     └─ daangn-tone-references.csv  # 공개 문구와 출처
-├─ spec/                            # 기능별 상세 명세
-│  ├─ spec_001.md                   # 현재 구현 동작과 한계
-│  └─ spec_002.md                   # 기획서 입력·대상 선택·자료·초안 추가 요구사항
-│
-├─ node_modules/                    # npm 설치 결과; Git 제외, 재설치 가능
-└─ .git/                            # Git 이력과 저장소 정보
-```
-
-### 실행 경로와 헷갈리기 쉬운 구분
-
-- **로컬 실행:** `npm run dev` → `scripts/dev-server.mjs` → `prototype/` 화면 제공. `/api/*`는 `scripts/supabase-api.mjs`가 처리합니다.
-- **Vercel 실행:** `vercel.json` → `prototype/` 화면 제공. `/api/*`는 `api/index.js`를 거쳐 같은 `scripts/supabase-api.mjs`를 사용합니다. 두 서버 진입점은 실행 환경이 달라 필요합니다.
-- **자동 테스트:** `npm test`로 `tests/` 아래 자동 테스트를 실행합니다. `fixtures.test.js`는 `fixtures/`의 입력·기대 결과와 `tools/notice-contract.mjs`를 사용합니다. `fixtures/documents/`와 `fixtures/source_text/`는 각각 파일 입력과 원문 대조에 필요합니다.
-- **자료 생성·공지 평가:** `python tests/tools/build_fixtures.py`로 자료를 생성하고, `node tests/tools/evaluate-notice.mjs candidate.json`으로 새 공지의 사실 관계를 검사합니다. 환경 요건과 자료 범위는 [테스트 README](tests/README.md)를 참고합니다.
-- **Sheets 가져오기와 규칙 티켓:** 화면은 `rule-engine.js`를 직접 사용합니다. 서버는 `google-sheets-source.mjs`와 `application-source.mjs`로 네 탭을 읽고 신청 이력을 정규화한 뒤 화면에 반환합니다. 세 모듈 모두 자동 테스트에서도 사용합니다.
-
-### 정리 후보
-
-`node_modules/`는 재생성 가능한 설치물입니다. 공간이 필요할 때 삭제 후 `npm ci`로 복원할 수 있지만, 앱·문서 처리·Gemini 연결 확인에 사용하는 패키지가 들어 있으므로 일반 작업 중에는 유지합니다. `package.json`과 `package-lock.json`도 함께 유지합니다.
-
-`pdfjs-dist`와 `yauzl`은 현재 `scripts/document-reader.mjs`에서 사용하므로 미사용 패키지로 분류하지 않습니다. 의존성 정리는 현재 코드의 참조를 기준으로 판단합니다.
-
-`tests/`, `supabase/migrations/`, `.env`, `.git/`는 테스트와 입력 자료, DB 재구성 이력, 로컬 연결 설정, 버전 이력을 각각 보관합니다.
-
-추가로 구조를 정리한다면 `scripts/`의 서버 모듈을 `server/`로 분리하고, `spec/`을 `docs/spec/`으로 합칠 수 있습니다. 실제 이동 시 import·문서 링크와 로컬·Vercel 실행 경로를 함께 수정해야 합니다.
 # Supabase 시간별 시트 동기화
 
 웹앱은 Supabase Auth에 직접 로그인하고,
@@ -261,7 +262,7 @@ npm run dev
 Supabase URL은 `/api/status`가 전달합니다. 비밀번호와 service role key는 웹앱에 저장하지 않습니다.
 
 예약 작업은 `supabase/functions/sync-sheets/index.ts`에 있습니다. 시트 네 탭을 읽고
-신청·취소 이력을 검증한 뒤 `prototype/rule-engine.js`와 같은 규칙으로 티켓을 평가합니다.
+신청·취소 이력을 검증한 뒤 `web/rule-engine.js`와 같은 규칙으로 티켓을 평가합니다.
 성공한 최신 스냅샷은 한 행만 갱신하며, `sheet_application_events`에는 처음 본 사건만
 추가합니다. 이미 저장한 사건이 시트에서 사라지거나 바뀌면 동기화를 중단합니다.
 

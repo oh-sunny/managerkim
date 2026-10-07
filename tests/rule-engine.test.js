@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {adjustToPreviousBusinessTime, evaluateReminderTickets} from '../prototype/rule-engine.js';
+import {adjustToPreviousBusinessTime, evaluateReminderTickets} from '../web/rule-engine.js';
 
 const employees = Array.from({length: 11}, (_, index) => ({id: index + 1}));
 const project = {

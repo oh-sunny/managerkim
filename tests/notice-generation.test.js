@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {createNoticeGenerator,validateNoticeInput,BRIEF_FIELDS} from '../scripts/notice-generation.mjs';
-import {prepareNoticeGeneration,NOTICE_TONE_LABELS} from '../prototype/notice-generation-input.js';
+import {prepareNoticeGeneration,NOTICE_TONE_LABELS} from '../web/notice-generation-input.js';
 import {createPublicHolidayCalendar} from '../scripts/public-holidays.mjs';
-import {generationSignature,acceptNoticeCandidate,makeNoticeBrief} from '../prototype/notice-draft.js';
+import {generationSignature,acceptNoticeCandidate,makeNoticeBrief} from '../web/notice-draft.js';
 
 const card=Object.fromEntries(BRIEF_FIELDS.map(key=>[key,{value:'',included:false,status:'missing',source:'직접 입력'}]));
 card.what={value:'건강검진 신청 안내',included:true,status:'confirmed',source:'프로젝트 정보'};
@@ -53,6 +53,20 @@ test('Gemini receives only included confirmed facts and blocks invented links',a
   const unsupported=createNoticeGenerator({apiKey:'test',model:'gemini-3.7-flash',generate:async()=>({text:++reviewCalls===1?'건강검진을 신청해주세요. 10월 16일 18:00까지 검진기관을 선택하세요.':'{"supported":false,"issues":["자료에 없는 혜택"]}'})});
   await assert.rejects(()=>unsupported.generate(input),/정보 카드로 확인되지 않은 내용/);
   assert.throws(()=>validateNoticeInput({...input,card:{...card,action:{...card.action,included:false}}}),/해야 할 일/);
+});
+
+test('generated bold markers are removed before validation and the saved body stays plain text',async()=>{
+  const requests=[];
+  const generator=createNoticeGenerator({apiKey:'test',model:'gemini-3.7-flash',generate:async request=>{
+    requests.push(request);
+    return {text:requests.length===1
+      ? '**[대상]**\n건강검진 신청 안내\n**[해야 할 일]**\n검진기관을 선택해 신청하세요.\n**[신청 마감]**\n10월 16일 18:00까지\nhttps://example.org/apply'
+      : '{"supported":true,"issues":[]}'};
+  }});
+  const result=await generator.generate(input);
+  assert.match(requests[0].config.systemInstruction,/일반 텍스트/);
+  assert.equal(result.body,'[대상]\n건강검진 신청 안내\n[해야 할 일]\n검진기관을 선택해 신청하세요.\n[신청 마감]\n10월 16일 18:00까지\nhttps://example.org/apply');
+  assert.equal(JSON.parse(requests[1].contents[0].text).body,result.body);
 });
 
 test('document facts populate separate action, method, cost and exception cards with evidence',()=>{

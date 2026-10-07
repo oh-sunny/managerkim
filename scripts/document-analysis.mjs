@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { GoogleGenAI } from '@google/genai';
-import { ANALYSIS_FIELDS, applicableValue } from '../prototype/analysis-contract.js';
-import { extractProjectCandidates } from '../prototype/document-extract.js';
+import { ANALYSIS_FIELDS, applicableValue } from '../web/analysis-contract.js';
+import { extractProjectCandidates } from '../web/document-extract.js';
 import { readDocuments, applyOcr, analysisError } from './document-reader.mjs';
 import { isGeminiModel, thinkingConfigFor } from './gemini-config.mjs';
 
