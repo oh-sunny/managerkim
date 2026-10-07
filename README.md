@@ -70,6 +70,7 @@
 │  ├─ data-architecture.md          # 데이터 흐름과 서버 저장 설계 초안
 │  ├─ REVIEW_SCREEN_REVISION.md     # 검토 화면 변경 이유와 논의 기록
 │  ├─ research_001.md               # 공개 사례 조사
+│  ├─ 발표자료/                     # 사용자가 제공한 발표 PDF와 참고 문서
 │  └─ references/                  # 공지 작성 참고 자료; 앱 실행 시 읽지 않음
 │     ├─ tone-guide.md              # 말투 기준
 │     └─ daangn-tone-references.csv  # 공개 문구와 출처
@@ -251,6 +252,7 @@ npm run dev
 - [데이터 흐름과 저장 구조](docs/data-architecture.md): 파일·텍스트 입력, 분석 후보, 확정 정보, 공지 초안과 신청/안내 이력을 Supabase·API에 연결하는 설계 초안
 - [공지 초안 톤 가이드](docs/references/tone-guide.md): 말투 작성 기준과 [공개 레퍼런스](docs/references/daangn-tone-references.csv). 현재 앱에서 읽는 데이터가 아닌 작성 참고 자료입니다.
 - [테스트 구성과 평가 방법](tests/README.md): 자동 테스트, 가상 사례 자료, 문서 생성·공지 평가 도구
+- [발표 자료](docs/발표자료/김총무_발표자료.pdf): 발표 PDF와 함께 받은 참고 문서 3개는 `docs/발표자료/`에 있습니다.
 
 # Supabase 시간별 시트 동기화
 
