@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {configureSupabase,signInSupabase,signOutSupabase,readOperatorState,uploadNoticeResource} from '../prototype/supabase-browser.js';
+import {configureSupabase,signInSupabase,signOutSupabase,restoreSupabaseUser,accessToken,readOperatorState,uploadNoticeResource} from '../prototype/supabase-browser.js';
 
 test('browser login reads operator state directly from Supabase with the user token', async t => {
   const previousFetch=globalThis.fetch,previousStorage=globalThis.sessionStorage;
@@ -78,4 +78,35 @@ test('browser removes an uploaded object when its metadata cannot be saved', asy
   Object.defineProperty(file,'name',{value:'guide.txt'});
   await assert.rejects(uploadNoticeResource(file,ownerId),/database unavailable/);
   assert.equal(calls.filter(call=>call.url.includes('/storage/v1/object/notice-files/')).map(call=>call.options.method).join(','),'POST,DELETE');
+});
+
+test('another same-origin tab can restore a shared session and observes sign-out', async t => {
+  const previous={fetch:globalThis.fetch,sessionStorage:globalThis.sessionStorage,window:globalThis.window,
+    CustomEvent:globalThis.CustomEvent,BroadcastChannel:globalThis.BroadcastChannel};
+  const values=new Map(),events=[];
+  globalThis.sessionStorage={getItem:key=>values.get(key)||null,setItem:(key,value)=>values.set(key,value),removeItem:key=>values.delete(key)};
+  globalThis.window={dispatchEvent:event=>events.push(event.detail)};
+  globalThis.CustomEvent=class {constructor(_name,{detail}){this.detail=detail;}};
+  class FakeChannel {
+    constructor(){FakeChannel.instance=this;this.messages=[];}
+    postMessage(message){this.messages.push(message);}
+    unref(){}
+  }
+  globalThis.BroadcastChannel=FakeChannel;
+  globalThis.fetch=async url=>String(url).endsWith('/auth/v1/user')
+    ? Response.json({id:'operator-1',email:'operator@example.com'})
+    : new Response(null,{status:404});
+  t.after(()=>Object.assign(globalThis,previous));
+  configureSupabase({supabaseUrl:'https://example.supabase.co',publishableKey:'public-key'});
+  const channel=FakeChannel.instance;
+  const session={access_token:'shared-access',refresh_token:'shared-refresh',expires_at:Math.floor(Date.now()/1000)+3600};
+  channel.onmessage({data:{type:'session',base:'https://other.supabase.co',session}});
+  assert.equal(values.size,0);
+  channel.onmessage({data:{type:'session',base:'https://example.supabase.co',session}});
+  assert.deepEqual(await restoreSupabaseUser(),{id:'operator-1',email:'operator@example.com'});
+  assert.equal(await accessToken(),'shared-access');
+  assert.deepEqual(events.at(-1),{signedIn:true});
+  channel.onmessage({data:{type:'signed-out',base:'https://example.supabase.co'}});
+  await assert.rejects(accessToken(),/로그인/);
+  assert.deepEqual(events.at(-1),{signedIn:false});
 });

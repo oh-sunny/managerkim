@@ -4,6 +4,8 @@ let base = '';
 let publishableKey = '';
 let session = null;
 let refreshing = null;
+let authChannel = null;
+let authWaiter = null;
 const FILE_MIME = {pdf: 'application/pdf', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', txt: 'text/plain', md: 'text/markdown', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg'};
 const MAX_NOTICE_FILE = 4_000_000;
 
@@ -14,10 +16,11 @@ const fail = async response => {
   error.code = body.code;
   throw error;
 };
-const save = value => {
+const save = (value, broadcast = false) => {
   session = value;
   if (value) sessionStorage.setItem(SESSION_KEY, JSON.stringify(value));
   else sessionStorage.removeItem(SESSION_KEY);
+  if(broadcast)authChannel?.postMessage({type:value?'session':'signed-out',session:value,base});
 };
 
 export function configureSupabase({supabaseUrl, publishableKey: key}) {
@@ -26,6 +29,24 @@ export function configureSupabase({supabaseUrl, publishableKey: key}) {
   base = url.origin;
   publishableKey = key;
   try { session = JSON.parse(sessionStorage.getItem(SESSION_KEY) || 'null'); } catch { save(null); }
+  if(!authChannel&&typeof window!=='undefined'&&typeof BroadcastChannel!=='undefined'){
+    authChannel=new BroadcastChannel('office-benefits-auth-v1');
+    authChannel.unref?.();
+    authChannel.onmessage=event=>{
+      const message=event.data;
+      if(message?.base!==base)return;
+      if(message?.type==='request-session'&&session)authChannel.postMessage({type:'session',session,base});
+      if(message?.type==='session'&&message.session?.access_token&&(!session||Number(message.session.expires_at)>Number(session.expires_at))){
+        save(message.session);
+        authWaiter?.();authWaiter=null;
+        window.dispatchEvent(new CustomEvent('office-benefits-auth-updated',{detail:{signedIn:true}}));
+      }
+      if(message?.type==='signed-out'){
+        save(null);authWaiter?.();authWaiter=null;
+        window.dispatchEvent(new CustomEvent('office-benefits-auth-updated',{detail:{signedIn:false}}));
+      }
+    };
+  }
 }
 
 async function authRequest(path, options = {}) {
@@ -42,18 +63,24 @@ async function refresh() {
   if (!session?.refresh_token) throw new Error('다시 로그인해주세요.');
   if (!refreshing) refreshing = authRequest('token?grant_type=refresh_token', {
     method: 'POST', body: JSON.stringify({refresh_token: session.refresh_token}),
-  }).then(next => { save(next); return next; }).catch(error => { if ([400, 401, 403].includes(error.status)) save(null); throw error; }).finally(() => { refreshing = null; });
+  }).then(next => { save(next,true); return next; }).catch(error => { if ([400, 401, 403].includes(error.status)) save(null,true); throw error; }).finally(() => { refreshing = null; });
   return refreshing;
 }
 
 export async function restoreSupabaseUser() {
+  if(!session?.access_token&&authChannel){
+    await new Promise(resolve=>{
+      authWaiter=resolve;authChannel.postMessage({type:'request-session',base});
+      setTimeout(()=>{if(authWaiter===resolve)authWaiter=null;resolve();},400);
+    });
+  }
   if (!session?.access_token) return null;
   try {
     const token = await accessToken();
     const user = await authRequest('user', {headers: {Authorization: `Bearer ${token}`}});
     return {id: user.id, email: user.email};
   } catch (error) {
-    if ([400, 401, 403].includes(error.status)) { save(null); return null; }
+    if ([400, 401, 403].includes(error.status)) { save(null,true); return null; }
     throw error;
   }
 }
@@ -62,17 +89,17 @@ export async function signInSupabase(email, password) {
   const next = await authRequest('token?grant_type=password', {
     method: 'POST', body: JSON.stringify({email, password}),
   });
-  save(next);
+  save(next,true);
   return {id: next.user.id, email: next.user.email};
 }
 
 export async function signOutSupabase() {
   try { if (session?.access_token) await authRequest('logout', {method: 'POST', headers: {Authorization: `Bearer ${session.access_token}`}}); }
-  finally { save(null); }
+  finally { save(null,true); }
 }
 
 export async function accessToken() {
-  if (!session?.access_token) throw Object.assign(new Error('Supabase 계정으로 로그인해주세요.'), {status: 401});
+  if (!session?.access_token) throw Object.assign(new Error('관리자 계정으로 로그인해주세요.'), {status: 401});
   if (Date.now() + 60_000 >= (session.expires_at || 0) * 1000) await refresh();
   return session.access_token;
 }

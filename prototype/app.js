@@ -1,12 +1,16 @@
 /* Slack sends are simulated. Document analysis and draft storage use authenticated server APIs. */
 import {calculateStatus, setApplication, applicationBreakdown, sortTicketsForDisplay} from './data.js';
 import {mountDocumentImport} from './document-import.js';
-import {evaluateReminderTickets} from './rule-engine.js';
-import {NOTICE_PURPOSES,BRIEF_LABELS,makeNoticeBrief,generationSignature,acceptNoticeCandidate} from './notice-draft.js';
+import {evaluateFirstNoticeTicket,evaluateReminderTickets} from './rule-engine.js';
+import {buildRegistrationSummary} from './registration-summary.js';
+import {NOTICE_PURPOSES,BRIEF_LABELS,makeNoticeBrief,prepareNoticeDraft,restoreNoticeDraft,compareDraftProject,acceptProjectReview,generationSignature,acceptNoticeCandidate} from './notice-draft.js';
+import {makeNoticeResource,latestProjectResources,snapshotSimulatedNotice} from './notice-resources.js';
+import {prepareNoticeGeneration,NOTICE_TONE_LABELS} from './notice-generation-input.js';
 import {projectSendSnapshot,sheetSendSnapshot} from './send-preflight.js';
 import {mergeSheetApplications} from './sheet-application-merge.js';
 import {newProjectId} from './project-id.js';
 import {quickRecipientSelection,recipientGroups,recipientCounts,recipientGroupLabel} from './recipient-selection.js';
+import {mergeOperatorPayload} from './operator-merge.js';
 import {configureSupabase,restoreSupabaseUser,signInSupabase,signOutSupabase,accessToken,supabaseRequest,readOperatorState,saveOperatorState as saveStateDirect,readSheetSnapshot,readAutomationTickets,readDrafts,readDraft,saveDraft,createFileUrl,uploadNoticeResource} from './supabase-browser.js';
 const $ = selector => document.querySelector(selector);
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
@@ -68,18 +72,21 @@ const INITIAL_RECORDS = [
 ];
 const STORAGE_KEY = 'office-benefits-web-v1';
 const TODAY_KST = new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+$('#topbar-date').textContent=`오늘 ${TODAY_KST.replaceAll('-','.')}`;
 let records = structuredClone(INITIAL_RECORDS);
 let completed = {};
 let calendar = {year:Number(TODAY_KST.slice(0,4)),month:Number(TODAY_KST.slice(5,7))-1,selected:TODAY_KST,view:'calendar'};
 let drafts = {};
 let cloudConfigured = false;
 let cloudUser = null;
+let cloudInitializing = false;
 const cloudState = {};
 const cloudTimers = new Map();
 const cloudSaves = new Map();
 const noticeStates = new Map();
 let activeTab = 'tickets';
 let historyFilter = 'all';
+let historySourceFilter = 'all';
 let rosterSearch = '';
 let rosterFilter = 'all';
 let recipientPage = 0;
@@ -90,6 +97,8 @@ let previewContext = null;
 let ticketDialogContext = null;
 let toastTimeout;
 let projectFormError = '';
+let projectFormBaseline = '';
+let projectFormAllowNavigation = false;
 let appliedDocumentName = '';
 let appliedFieldReviews = {};
 let appliedSourceIssues = null;
@@ -104,12 +113,15 @@ let sheetSyncError = '';
 let officialCalendar = null;
 let holidayError = '';
 let operatorVersion = 0;
+let operatorBasePayload = null;
 let operatorOwnerId = null;
 let operatorDirty = false;
 let operatorRevision = 0;
 let operatorSaveTimer;
 let operatorSaving = false;
 let operatorConflict = null;
+let operatorConflictPaths = [];
+let operatorDeferredState = null;
 let operatorSaveStatus = 'local';
 const status = p => calculateStatus(p,applications,EMPLOYEES);
 const projectCount = p => {const s=status(p);return {...s,total:s.targetIds.length,registered:s.appliedIds.length,required:s.requiredPendingIds.length};};
@@ -119,11 +131,18 @@ const getTicket = id => TICKETS.find(t=>t.id===id);
 const ticketState = t => completed[t.id] ? 'done' : t.state;
 const projectTickets = id => TICKETS.filter(t=>t.project===id);
 const projectRecords = id => records.filter(r=>r.project===id).sort((a,b)=>b.date.localeCompare(a.date));
-const pendingTickets = id => TICKETS.filter(t=>(!id || t.project===id) && ticketState(t)==='pending');
+const pendingTickets = id => TICKETS.filter(t=>(!id || t.project===id) && ticketState(t)==='pending'&&!needsDeadlineReview(t)&&activeProject(getProject(t.project)));
 const pendingProjects = () => PROJECTS.filter(p=>pendingTickets(p.id).length);
 const dayKey = d => d.toISOString().slice(0,10);
 const daysLeft = p => Math.round((Date.parse(p.deadline+'T00:00:00Z')-Date.parse(TODAY_KST+'T00:00:00Z'))/86400000);
-const deadlineLabel = p => daysLeft(p)<0?'마감됨':daysLeft(p)===0?'오늘 마감':`D-${daysLeft(p)}`;
+const deadlineLabel = p => daysLeft(p)<0?`마감 ${-daysLeft(p)}일 경과`:daysLeft(p)===0?'오늘 마감':`D-${daysLeft(p)}`;
+const activeProject = p => Boolean(p&&(!p.lifecycle||p.lifecycle==='active'));
+const needsDeadlineReview = t => {
+  const project=getProject(t.project);
+  const deadline=project?.deadlineAt;
+  const deadlineMs=Date.parse(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(deadline||'')?`${deadline}:00+09:00`:deadline);
+  return Boolean(project&&['pending','scheduled'].includes(ticketState(t))&&Number.isFinite(deadlineMs)&&deadlineMs<Date.now());
+};
 const dateLabel = value => {const [y,m,d] = value.slice(0,10).split('-');return `${Number(m)}월 ${Number(d)}일`;};
 const recordDate = value => `${dateLabel(value)} ${value.slice(11,16)}`;
 const tag = (text,kind='gray') => `<span class="tag ${kind}">${escapeHtml(text)}</span>`;
@@ -147,10 +166,11 @@ function validRecord(r) {
 function restore() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (!saved || ![1,2,3,4,5,6].includes(saved.version)) return;
+    if (!saved || ![1,2,3,4,5,6,7].includes(saved.version)) return;
     if(saved.operatorOwnerId&&saved.operatorOwnerId!==cloudUser?.id)return;
     operatorOwnerId=saved.operatorOwnerId||null;
     operatorVersion=Number.isInteger(saved.operatorVersion)?saved.operatorVersion:0;
+    operatorBasePayload=saved.operatorBasePayload&&typeof saved.operatorBasePayload==='object'?saved.operatorBasePayload:null;
     operatorDirty=saved.operatorDirty===true||saved.version<5;
     if(saved.version>=6&&Array.isArray(saved.employees)){
       const knownTeams=new Set(TEAMS.map(team=>team.id));
@@ -191,7 +211,7 @@ function restore() {
         const source=saved.drafts[t.id];if(!source||typeof source!=='object')return;
         const d=getDraft(t);
         if(typeof source.body==='string'&&source.body.length<=20000)d.body=source.body;
-        if(['friendly','concise','action'].includes(source.tone))d.tone=source.tone;
+        if(Object.hasOwn(NOTICE_TONE_LABELS,source.tone))d.tone=source.tone;
         if(Object.hasOwn(NOTICE_PURPOSES,source.purpose))d.purpose=source.purpose;
         if(['dm','channel'].includes(source.mode))d.mode=source.mode;
         if(['pending','project','company'].includes(source.scope))d.scope=source.scope;
@@ -205,6 +225,9 @@ function restore() {
         if(Array.isArray(source.resources))d.resources=source.resources.filter(item=>item && ['file','link'].includes(item.kind) && typeof item.label==='string').slice(0,20);
         if(source.brief&&typeof source.brief==='object')d.brief=source.brief;
         d.briefStale=source.briefStale===true;
+        d.projectSnapshot=source.projectSnapshot;
+        d.projectReviewRequired=source.projectReviewRequired===true;
+        Object.assign(d,restoreNoticeDraft(d,getProject(t.project)).draft);
       });
     }
   } catch { /* Storage is optional; retain usable defaults. */ }
@@ -214,18 +237,18 @@ function persist({remote=true}={}) {
   try {
     const savedDrafts=Object.fromEntries(Object.entries(drafts).map(([id,{confirmed,confirmedSignature,confirmedSourceSnapshot,confirmedSpreadsheetId,...draft}])=>[id,draft]));
     if(remote){operatorDirty=true;operatorRevision++;if(cloudUser)scheduleOperatorSave();}
-    localStorage.setItem(STORAGE_KEY,JSON.stringify({version:6,employees:EMPLOYEES,sheetSync,projects:PROJECTS,applications,applicationEvents,records,tickets:TICKETS,completed,calendar,drafts:savedDrafts,operatorOwnerId,operatorVersion,operatorDirty}));
+    localStorage.setItem(STORAGE_KEY,JSON.stringify({version:7,employees:EMPLOYEES,sheetSync,projects:PROJECTS,applications,applicationEvents,records,tickets:TICKETS,completed,calendar,drafts:savedDrafts,operatorOwnerId,operatorVersion,operatorBasePayload,operatorDirty}));
     renderCloudButton();
     return true;
   }
   catch { toast('브라우저에 저장하지 못했어요. 이 화면을 열어둔 동안에는 내용을 유지해요.'); return false; }
 }
 function operatorLabel(){
-  if(!cloudConfigured)return 'Supabase 설정 필요';
-  if(!cloudUser)return 'Supabase 로그인';
-  return ({saved:'운영 정보 서버 저장됨',pending:'운영 정보 저장 대기',saving:'운영 정보 저장 중',error:'운영 정보 저장 실패',conflict:'운영 정보 충돌',local:'운영 정보 확인 중'})[operatorSaveStatus];
+  if(!cloudConfigured)return '관리자 로그인 설정 필요';
+  if(!cloudUser)return '관리자 로그인';
+  return ({saved:'운영 정보 서버 저장됨',pending:'운영 정보 저장 대기',saving:'운영 정보 저장 중',error:'운영 정보 저장 실패',conflict:'운영 정보 충돌','remote-pending':'다른 탭 변경 확인 대기',local:'운영 정보 확인 중'})[operatorSaveStatus];
 }
-function requireOperator(){if(cloudUser)return true;toast('입력한 내용을 서버에 저장하려면 먼저 Supabase에 로그인해주세요.');openCloudDialog();return false;}
+function requireOperator(){if(cloudUser)return true;toast('입력한 내용을 서버에 저장하려면 먼저 관리자 계정으로 로그인해주세요.');openCloudDialog();return false;}
 function scheduleOperatorSave(){
   if(!cloudUser||operatorConflict)return;
   clearTimeout(operatorSaveTimer);operatorSaveStatus='pending';renderCloudButton();
@@ -234,30 +257,56 @@ function scheduleOperatorSave(){
 async function saveOperatorState(){
   if(!cloudUser||operatorSaving||!operatorDirty||operatorConflict)return;
   operatorSaving=true;operatorSaveStatus='saving';renderCloudButton();
-  const revision=operatorRevision,payload=structuredClone(operatorPayload());
   try{
-    const result=await saveStateDirect(operatorVersion,payload);
-    operatorVersion=result.version;operatorOwnerId=cloudUser.id;operatorDirty=operatorRevision!==revision;
-    operatorSaveStatus=operatorDirty?'pending':'saved';persist({remote:false});
+    for(let attempt=0;attempt<2;attempt++){
+      const {state}=await readOperatorState();
+      if(state&&state.version!==operatorVersion&&!rebaseOperatorState(state))return;
+      const revision=operatorRevision,payload=structuredClone(operatorPayload());
+      try{
+        const result=await saveStateDirect(operatorVersion,payload);
+        operatorVersion=result.version;operatorBasePayload=payload;operatorOwnerId=cloudUser.id;operatorDeferredState=null;operatorDirty=operatorRevision!==revision;
+        operatorSaveStatus=operatorDirty?'pending':'saved';persist({remote:false});return;
+      }catch(error){if(error.status===409&&error.current&&attempt===0){if(!rebaseOperatorState(error.current))return;continue;}throw error;}
+    }
   }catch(error){operatorConflict=error.status===409?error.current:null;operatorSaveStatus=error.status===409?'conflict':'error';renderCloudButton();}
   finally{operatorSaving=false;if(operatorDirty&&operatorSaveStatus==='pending')scheduleOperatorSave();}
 }
-function applyOperatorState(record){
-  const data=record.payload;
+function setOperatorData(data){
   if(!data||!Array.isArray(data.projects)||!Array.isArray(data.applications)||!Array.isArray(data.tickets)||!Array.isArray(data.records))throw new Error('서버 운영 정보의 형식이 올바르지 않습니다.');
   if(Array.isArray(data.employees)&&data.employees.length)EMPLOYEES=structuredClone(data.employees);
   sheetSync=data.sheetSync&&typeof data.sheetSync==='object'?structuredClone(data.sheetSync):null;
   PROJECTS=structuredClone(data.projects);applications=structuredClone(data.applications);
   applicationEvents=structuredClone(data.applicationEvents||[]);records=structuredClone(data.records);
   TICKETS=structuredClone(data.tickets);completed=structuredClone(data.completed||{});
-  operatorVersion=record.version;operatorOwnerId=cloudUser.id;operatorDirty=false;operatorConflict=null;operatorSaveStatus='saved';
-  persist({remote:false});if(route().view!=='edit-project')render();
+}
+function applyOperatorState(record){
+  setOperatorData(record.payload);
+  operatorBasePayload=structuredClone(record.payload);
+  operatorVersion=record.version;operatorOwnerId=cloudUser.id;operatorDeferredState=null;operatorDirty=false;operatorConflict=null;operatorConflictPaths=[];operatorSaveStatus='saved';
+  persist({remote:false});if(route().view!=='edit-project'||!projectFormDirty())render();
+}
+function rebaseOperatorState(record){
+  const result=mergeOperatorPayload(operatorBasePayload,operatorPayload(),record.payload);
+  if(result.conflicts.length){
+    operatorConflict=record;operatorConflictPaths=result.conflicts;operatorSaveStatus='conflict';renderCloudButton();
+    return false;
+  }
+  setOperatorData(result.payload);
+  operatorBasePayload=structuredClone(record.payload);operatorVersion=record.version;operatorOwnerId=cloudUser.id;operatorDeferredState=null;
+  operatorDirty=true;operatorConflict=null;operatorConflictPaths=[];operatorSaveStatus='pending';
+  persist({remote:false});if(route().view!=='edit-project'||!projectFormDirty())render();
+  return true;
 }
 async function hydrateOperatorState(){
   const startedAtRevision=operatorRevision;
   const {state}=await readOperatorState();
   if(!state){operatorVersion=0;operatorConflict=null;operatorSaveStatus='pending';operatorDirty=true;scheduleOperatorSave();return;}
-  if((operatorDirty||operatorRevision!==startedAtRevision)&&operatorVersion!==state.version){operatorConflict=state;operatorSaveStatus='conflict';renderCloudButton();return;}
+  if(route().view==='edit-project'&&projectFormDirty()&&operatorVersion!==state.version){operatorDeferredState=state;operatorSaveStatus='remote-pending';renderCloudButton();return;}
+  if((operatorDirty||operatorRevision!==startedAtRevision)&&operatorVersion!==state.version){if(rebaseOperatorState(state))scheduleOperatorSave();return;}
+  if(operatorDirty||operatorRevision!==startedAtRevision){
+    if(!operatorBasePayload)operatorBasePayload=structuredClone(state.payload);
+    operatorVersion=state.version;operatorOwnerId=cloudUser.id;operatorSaveStatus='pending';scheduleOperatorSave();return;
+  }
   applyOperatorState(state);
 }
 function prepareOperatorCache(){
@@ -265,7 +314,7 @@ function prepareOperatorCache(){
   if(saved?.operatorOwnerId&&saved.operatorOwnerId!==cloudUser?.id){
     EMPLOYEES=structuredClone(INITIAL_EMPLOYEES);sheetSync=null;PROJECTS=structuredClone(INITIAL_PROJECTS);applications=structuredClone(INITIAL_APPLICATIONS);
     applicationEvents=[];records=structuredClone(INITIAL_RECORDS);TICKETS=structuredClone(INITIAL_TICKETS);completed={};drafts={};
-    operatorVersion=0;operatorOwnerId=null;operatorDirty=false;operatorConflict=null;operatorSaveStatus='local';
+    operatorVersion=0;operatorBasePayload=null;operatorOwnerId=null;operatorDirty=false;operatorConflict=null;operatorDeferredState=null;operatorSaveStatus='local';
     localStorage.removeItem(STORAGE_KEY);
   }else restore();
 }
@@ -274,24 +323,37 @@ async function refreshOperatorState(){
   try{
     const {state}=await readOperatorState();
     if(!state||state.version===operatorVersion)return;
-    if(operatorDirty){operatorConflict=state;operatorSaveStatus='conflict';renderCloudButton();}
+    if(route().view==='edit-project'&&projectFormDirty()){operatorDeferredState=state;operatorSaveStatus='remote-pending';renderCloudButton();return;}
+    if(operatorDirty){if(rebaseOperatorState(state))scheduleOperatorSave();}
     else applyOperatorState(state);
   }catch{operatorSaveStatus='error';renderCloudButton();}
 }
 function checkedAtIso(value){return /(?:Z|[+-]\d{2}:\d{2})$/i.test(value||'')?value:`${value}:00+09:00`;}
 function reconcileProjectTickets(project){
-  const prior=TICKETS.filter(t=>t.project===project.id&&t.key);
   if(project.lifecycle&&project.lifecycle!=='active'){
     let changed=false;
     for(const ticket of TICKETS.filter(t=>t.project===project.id))if(['pending','scheduled','deferred'].includes(ticket.state)){ticket.state='retired';ticket.lifecycleReason=project.lifecycle==='cancelled'?'프로젝트 취소':'운영 종료';changed=true;}
     return changed;
   }
-  if(!officialCalendar||!project.lastCheckedAt||['sample','sheet'].includes(project.dataKind))return false;
+  let firstChanged=false;
+  if(project.dataKind==='local'){
+    const priorFirst=TICKETS.filter(t=>t.project===project.id&&t.key?.startsWith(`${project.id}:initial:`));
+    const first=evaluateFirstNoticeTicket({project,now:new Date().toISOString(),existingTickets:priorFirst});
+    for(const candidate of first.tickets){
+      const old=priorFirst.find(ticket=>ticket.key===candidate.key);
+      const next={...old,...candidate,id:old?.id||candidate.id,title:`${project.name} 첫 안내 준비`,purpose:'첫 안내',ruleGenerated:true};
+      if(old){if(JSON.stringify(old)!==JSON.stringify(next)){TICKETS[TICKETS.indexOf(old)]=next;firstChanged=true;}}
+      else{TICKETS.push(next);firstChanged=true;}
+    }
+    for(const key of first.retiredKeys){const ticket=priorFirst.find(item=>item.key===key);if(ticket&&ticket.state!=='retired'){ticket.state='retired';ticket.lifecycleReason='첫 안내 검토 시각 변경';firstChanged=true;}}
+  }
+  if(!officialCalendar||!project.lastCheckedAt||['sample','sheet'].includes(project.dataKind))return firstChanged;
+  const prior=TICKETS.filter(t=>t.project===project.id&&t.key);
   const output=evaluateReminderTickets({project,applicationRecords:applications,employees:EMPLOYEES,
     sync:{status:'success',lastSuccessAt:checkedAtIso(project.lastCheckedAt)},calendar:officialCalendar,
     now:new Date().toISOString(),policy:{maxDataAgeMinutes:1440},existingTickets:prior,sentRecords:records});
-  if(output.status!=='ready'){holidayError=`${project.name}: 신청 현황을 새로 확인해야 티켓을 갱신할 수 있어요 (${output.blockedReasons.join(', ')}).`;return false;}
-  const byKey=new Map(prior.map(t=>[t.key,t]));let changed=false;
+  if(output.status!=='ready'){holidayError=`${project.name}: 신청 현황을 새로 확인해야 티켓을 갱신할 수 있어요 (${output.blockedReasons.join(', ')}).`;return firstChanged;}
+  const byKey=new Map(prior.map(t=>[t.key,t]));let changed=firstChanged;
   for(const candidate of output.tickets){
     const old=byKey.get(candidate.key),id=old?.id||`${project.id}-${candidate.kind}-${candidate.dueAt.replace(/\D/g,'')}`;
     const next={...old,...candidate,id,project:project.id,purpose:candidate.triggers.map(trigger=>trigger.startsWith('deadline-')?`마감 ${trigger.slice(9).replace('h','시간 전')}`:trigger).join(' · '),state:candidate.state,
@@ -326,7 +388,7 @@ async function initializeSheetSource(){sheetSourceStatus.configured=cloudConfigu
 function sheetSourcePanel(){
   const link=sheetSourceStatus.spreadsheetId?`<a href="https://docs.google.com/spreadsheets/d/${encodeURIComponent(sheetSourceStatus.spreadsheetId)}/edit" target="_blank" rel="noopener noreferrer">예시 스프레드시트 열기 ${icon('external')}</a>`:'';
   const last=sheetSync?.lastSuccessAt?new Date(sheetSync.lastSuccessAt).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}):null;
-  return `<section class="panel sheet-source-panel"><div><h2>Google 스프레드시트 원본</h2><p class="caption muted">Supabase에 저장된 직원명부·프로젝트·대상·신청이력을 표시합니다. 정기 작업을 설정하면 매시간 갱신하고, 지금 가져오기를 누르면 바로 다시 확인해요.</p><p class="caption">${sheetSyncError?escapeHtml(sheetSyncError):last?`마지막 가져오기: ${escapeHtml(last)} · 직원 ${sheetSync.employeeCount}명 · 이력 ${sheetSync.eventCount}건`:sheetSourceStatus.configured?'첫 동기화를 기다리고 있어요.':'Supabase 연결 설정이 필요합니다.'}</p>${link}</div><button class="button" data-action="sync-sheet" ${sheetSyncBusy||!sheetSourceStatus.configured||!cloudUser?'disabled':''}>${sheetSyncBusy?'가져오는 중…':'지금 가져오기'}</button></section>`;
+  return `<section class="panel sheet-source-panel"><div><h2>Google 스프레드시트 원본</h2><p class="caption muted">서버에 저장된 직원명부·프로젝트·대상·신청이력을 표시합니다. 정기 작업을 설정하면 매시간 갱신하고, 지금 가져오기를 누르면 바로 다시 확인해요.</p><p class="caption">${sheetSyncError?escapeHtml(sheetSyncError):last?`마지막 가져오기: ${escapeHtml(last)} · 직원 ${sheetSync.employeeCount}명 · 이력 ${sheetSync.eventCount}건`:sheetSourceStatus.configured?'첫 동기화를 기다리고 있어요.':'서버 연결 설정이 필요합니다.'}</p>${link}</div><button class="button" data-action="sync-sheet" ${sheetSyncBusy||!sheetSourceStatus.configured||!cloudUser?'disabled':''}>${sheetSyncBusy?'가져오는 중…':'지금 가져오기'}</button></section>`;
 }
 function applySheetSource(source,{remote=true}={}){
   if(source?.sync?.status!=='success'||!Array.isArray(source.employees)||!Array.isArray(source.sourceProjects)||!Array.isArray(source.projectTargets)||!Array.isArray(source.events)||!Array.isArray(source.applications))throw new Error('시트의 데이터 형식을 확인해주세요.');
@@ -403,7 +465,7 @@ async function syncSheetSource(){
   catch(error){sheetSyncError=error.message||'시트를 읽지 못했습니다.';render();}
   finally{sheetSyncBusy=false;render();}
 }
-const cloudPayload = d => ({body:d.body,purpose:d.purpose,tone:d.tone,mode:d.mode,scope:d.scope,teams:d.teams,dmSelection:d.dmSelection,selectedIds:d.selectedIds,channels:d.channels,resources:d.resources||[],brief:d.brief,briefStale:d.briefStale===true,generatedAt:d.generatedAt||null,generatedModel:d.generatedModel||null});
+const cloudPayload = d => ({body:d.body,purpose:d.purpose,tone:d.tone,mode:d.mode,scope:d.scope,teams:d.teams,dmSelection:d.dmSelection,selectedIds:d.selectedIds,channels:d.channels,resources:d.resources||[],brief:d.brief,briefStale:d.briefStale===true,projectSnapshot:d.projectSnapshot,projectReviewRequired:d.projectReviewRequired===true,generatedAt:d.generatedAt||null,generatedModel:d.generatedModel||null});
 function cloudLabel(t) {
   const state=cloudState[t.id];
   if(!cloudConfigured)return '이 브라우저에 저장됨';
@@ -418,6 +480,7 @@ function updateCloudView(t) {
   $('#draft-retry').hidden=cloudState[t.id]?.status!=='error';
   $('#draft-conflict-actions').hidden=cloudState[t.id]?.status!=='conflict';
   $('#send-button').disabled=!canSend(t);
+  refreshSendReadiness(t);
 }
 function setCloudState(t,status,extra={}) {
   cloudState[t.id]={...cloudState[t.id],status,...extra};
@@ -426,7 +489,8 @@ function setCloudState(t,status,extra={}) {
 function applyCloudDraft(t,record) {
   const d=getDraft(t),source=record.payload||{};
   noticeStates.delete(t.id);
-  for(const field of ['body','purpose','tone','mode','scope','teams','dmSelection','selectedIds','channels','resources','brief','briefStale','generatedAt','generatedModel'])if(source[field]!==undefined)d[field]=structuredClone(source[field]);
+  for(const field of ['body','purpose','tone','mode','scope','teams','dmSelection','selectedIds','channels','resources','brief','briefStale','projectSnapshot','projectReviewRequired','generatedAt','generatedModel'])if(source[field]!==undefined)d[field]=structuredClone(source[field]);
+  Object.assign(d,restoreNoticeDraft(d,getProject(t.project)).draft);
   d._cloudVersion=record.version;d._cloudDirty=false;d._cloudRevision=0;
   d.confirmed=false;d.confirmedSignature='';
   d.confirmedSourceSnapshot='';
@@ -478,6 +542,8 @@ async function saveCloudDraft(t) {
   return success;
 }
 async function initializeCloud() {
+  if(cloudInitializing)return;
+  cloudInitializing=true;
   try {
     const config=await cloudRequest('/api/status');
     cloudConfigured=config.configured;
@@ -496,17 +562,39 @@ async function initializeCloud() {
       }
     }
   } catch {cloudConfigured=false;}
-  renderCloudButton();if(route().view!=='edit-project')render();
+  cloudInitializing=false;renderCloudButton();if(cloudUser)clearDocumentLoginError();if(route().view!=='edit-project')render();
+}
+function clearDocumentLoginError(){
+  const error=$('#document-error'),status=$('#document-status');
+  if(error&&/(?:Supabase|관리자).*로그인/.test(error.textContent)){
+    error.textContent='';error.hidden=true;
+    if(status?.textContent.includes('분석을 완료하지 못했습니다'))status.textContent='로그인했습니다. 자료 분석을 다시 시도할 수 있어요.';
+  }
 }
 function renderCloudButton(){
   $('#cloud-open').textContent=operatorLabel();
   $('#cloud-open').dataset.state=operatorSaveStatus;
 }
 function openCloudDialog() {
-  $('#cloud-dialog').innerHTML=`<div class="dialog-heading"><div><p class="eyebrow">서버 저장</p><h2 id="cloud-dialog-title">Supabase 연결</h2></div><button class="button icon-button" data-action="close-cloud" aria-label="창 닫기">${icon('close')}</button></div><div class="dialog-body">${!cloudConfigured?'<p>서버에 SUPABASE_URL과 SUPABASE_PUBLISHABLE_KEY 환경 변수를 설정해주세요. 로컬 실행에서는 .env를 사용합니다.</p>':cloudUser?`<p>${escapeHtml(cloudUser.email)} 계정 · ${escapeHtml(operatorLabel())}</p>${operatorSaveStatus==='conflict'?'<p class="error-message">다른 탭의 저장 내용과 현재 화면이 다릅니다. 서버 내용을 불러오거나 현재 화면을 새 버전으로 저장하세요.</p><div class="actions"><button class="button" data-action="load-operator-state">서버 내용 불러오기</button><button class="button" data-action="overwrite-operator-state">내 변경 저장</button></div>':operatorSaveStatus==='error'?'<button class="button" data-action="retry-operator-state">서버 저장 다시 시도</button>':''}${holidayError?`<p class="help">공휴일: ${escapeHtml(holidayError)}</p>`:''}<button class="button" data-action="cloud-signout">로그아웃</button>`:`<form id="cloud-login-form"><div class="field"><label for="cloud-email">이메일</label><input id="cloud-email" type="email" required autocomplete="username"></div><div class="field"><label for="cloud-password">비밀번호</label><input id="cloud-password" type="password" required autocomplete="current-password"></div><button class="button primary" type="submit">로그인</button><p class="help">Supabase에서 허용된 운영자 계정으로 로그인하세요.</p></form>`}<p id="cloud-error" class="error-message" role="alert" hidden></p></div>`;
+  $('#cloud-dialog').innerHTML=`<div class="dialog-heading"><div><p class="eyebrow">서버 저장</p><h2 id="cloud-dialog-title">관리자 로그인</h2></div><button class="button icon-button" data-action="close-cloud" aria-label="창 닫기">${icon('close')}</button></div><div class="dialog-body">${!cloudConfigured?'<p>서버에 SUPABASE_URL과 SUPABASE_PUBLISHABLE_KEY 환경 변수를 설정해주세요. 로컬 실행에서는 .env를 사용합니다.</p>':cloudUser?`<p>${escapeHtml(cloudUser.email)} 계정 · ${escapeHtml(operatorLabel())}</p>${operatorSaveStatus==='conflict'?'<p class="error-message">같은 항목을 다른 탭에서도 바꿨습니다. 서버 내용 또는 내 변경 중 남길 내용을 선택해주세요.</p><div class="actions"><button class="button" data-action="load-operator-state">서버 내용 불러오기</button><button class="button" data-action="overwrite-operator-state">내 변경 저장</button></div>':operatorSaveStatus==='remote-pending'?'<p class="help">다른 탭의 변경을 찾았습니다. 지금 편집 중인 양식을 저장하면 겹치지 않는 내용은 자동으로 합칩니다.</p>':operatorSaveStatus==='error'?'<button class="button" data-action="retry-operator-state">서버 저장 다시 시도</button>':''}${holidayError?`<p class="help">공휴일: ${escapeHtml(holidayError)}</p>`:''}<button class="button" data-action="cloud-signout">로그아웃</button><p class="help">서버에 저장되지 않은 초안은 로그아웃하면 사라집니다.</p>`:`<form id="cloud-login-form"><div class="field"><label for="cloud-email">이메일</label><input id="cloud-email" type="email" required autocomplete="username"></div><div class="field"><label for="cloud-password">비밀번호</label><input id="cloud-password" type="password" required autocomplete="current-password"></div><button class="button primary" type="submit">로그인</button><p class="help">관리자 계정으로 로그인하세요.</p></form>`}<p id="cloud-error" class="error-message" role="alert" hidden></p></div>`;
+  if(operatorConflictPaths.length&&operatorSaveStatus==='conflict'){
+    const message=$('#cloud-dialog .error-message');
+    if(message)message.textContent=`같은 항목을 다른 탭에서도 수정했습니다: ${operatorConflictPaths.slice(0,5).join(', ')}. 어느 내용을 남길지 선택해주세요.`;
+  }
   $('#cloud-dialog').showModal();
 }
 function closeCloudDialog() { $('#cloud-dialog').close(); }
+function showLogoutBlockers(){
+  const editing=projectFormDirty();
+  const hasFailedSave=operatorDirty;
+  const items=[
+    ...(operatorDirty?['운영 정보']:[]),
+    ...(editing?['편집 중인 프로젝트 양식 (양식의 ‘변경 저장’ 버튼으로 저장)']:[]),
+  ];
+  let box=$('#logout-blockers');
+  if(!box){$('#cloud-dialog .dialog-body').insertAdjacentHTML('beforeend','<section id="logout-blockers" class="logout-blockers" role="alert"></section>');box=$('#logout-blockers');}
+  box.innerHTML=`<p class="error-message">아래 내용을 저장하거나 버리고 로그아웃할 수 있습니다.</p><ul>${items.map(item=>`<li>${escapeHtml(item)}</li>`).join('')}</ul><div class="actions">${editing?'<button class="button" data-action="close-cloud">편집 계속하기</button>':''}${hasFailedSave?'<button class="button" data-action="retry-logout">저장 다시 시도</button>':''}<button class="button" data-action="discard-logout">저장되지 않은 변경 버리고 로그아웃</button></div>`;
+}
 async function loginCloud(event) {
   event.preventDefault();
   const submit=$('#cloud-login-form button[type="submit"]'),error=$('#cloud-error');
@@ -518,7 +606,8 @@ async function loginCloud(event) {
     await refreshAutomatedSheetState();
     await hydrateCloudDrafts();
     void refreshOfficialCalendarAndTickets();
-    closeCloudDialog();renderCloudButton();if(route().view!=='edit-project')render();toast('Supabase에 연결했습니다.');
+    clearDocumentLoginError();
+    closeCloudDialog();renderCloudButton();if(route().view!=='edit-project')render();toast('관리자 계정으로 로그인했습니다.');
   } catch(cause) {
     error.textContent=cause.message;error.hidden=false;
     if(cloudUser){
@@ -527,28 +616,37 @@ async function loginCloud(event) {
     }
   } finally {if(submit.isConnected)submit.disabled=false;}
 }
-async function logoutCloud() {
+async function logoutCloud({discard=false}={}) {
   clearTimeout(operatorSaveTimer);
-  if(operatorDirty){await saveOperatorState();if(operatorDirty){toast('저장되지 않은 운영 정보가 있어요. 저장 상태를 확인한 뒤 로그아웃해주세요.');return;}}
-  for(const t of TICKETS.filter(item=>drafts[item.id]?._cloudDirty)){
-    if(!await saveCloudDraft(t)){toast('저장되지 않은 초안이 있어요. 저장 상태를 확인한 뒤 로그아웃해주세요.');return;}
+  if(!discard){
+    if(operatorDirty)await saveOperatorState();
+    if(projectFormDirty()||operatorDirty){
+      showLogoutBlockers();return;
+    }
   }
+  for(const timer of cloudTimers.values())clearTimeout(timer);
+  cloudTimers.clear();
   try {await signOutSupabase();} catch { /* Clear this browser session even if the upstream logout fails. */ }
   cloudUser=null;drafts={};noticeStates.clear();EMPLOYEES=structuredClone(INITIAL_EMPLOYEES);sheetSync=null;sheetSourceStatus.spreadsheetId=null;
   PROJECTS=structuredClone(INITIAL_PROJECTS);applications=structuredClone(INITIAL_APPLICATIONS);
   applicationEvents=[];records=structuredClone(INITIAL_RECORDS);TICKETS=structuredClone(INITIAL_TICKETS);completed={};
-  operatorVersion=0;operatorOwnerId=null;operatorDirty=false;operatorConflict=null;operatorSaveStatus='local';
+  operatorVersion=0;operatorBasePayload=null;operatorOwnerId=null;operatorDirty=false;operatorConflict=null;operatorConflictPaths=[];operatorDeferredState=null;operatorSaveStatus='local';
   for(const timer of cloudTimers.values())clearTimeout(timer);
   cloudTimers.clear();
   for(const id of Object.keys(cloudState))delete cloudState[id];
-  persist({remote:false});closeCloudDialog();renderCloudButton();if(route().view!=='edit-project')render();toast('로그아웃했습니다.');
+  persist({remote:false});closeCloudDialog();renderCloudButton();render();toast('로그아웃했습니다.');
 }
 async function uploadNoticeFile(t,file) {
-  if(!cloudUser){toast('저장 설정에서 로그인해주세요.');return;}
+  if(!cloudUser){toast('먼저 관리자 로그인을 해주세요.');return;}
+  const scope=$('#resource-scope')?.value||'notice';
   setCloudState(t,'saving');
   try {
     const resource=await uploadNoticeResource(file,cloudUser.id);
-    const d=getDraft(t);d.resources=[...(d.resources||[]),{kind:'file',id:resource.id,label:resource.label,byte_size:resource.byte_size,mime_type:resource.mime_type,sha256:resource.sha256,version:resource.version}];
+    const entry=makeNoticeResource({kind:'file',scope,label:resource.label,storagePath:resource.storage_path,
+      mimeType:resource.mime_type,byteSize:resource.byte_size,sha256:resource.sha256},
+      {projectId:t.project,ticketId:t.id,id:resource.id});
+    const d=getDraft(t);d.resources=[...(d.resources||[]),entry];
+    if(scope==='project'){const p=getProject(t.project);p.noticeResources=[...(p.noticeResources||[]),entry];persist();}
     d.confirmed=false;render();updateApproval(t);toast('파일을 비공개 저장소에 저장했어요.');
   } catch(error){setCloudState(t,'error');toast(error.message);}
 }
@@ -557,11 +655,17 @@ async function refreshCloudDraft(t) {
   try {
     const remote=await readDraft(t.id);
     const d=getDraft(t);
-    if(remote.version===d._cloudVersion)return;
+    if(remote.version===d._cloudVersion){
+      if(d._cloudDirty)scheduleCloudSave(t,true);
+      else setCloudState(t,'saved',{updatedAt:remote.updated_at});
+      return;
+    }
     if(d._cloudDirty)setCloudState(t,'conflict',{remote});
     else {applyCloudDraft(t,remote);render();}
   } catch(error){
     if(error.status===404 && getDraft(t)._cloudVersion)setCloudState(t,'conflict',{remote:null});
+    else if(error.status===404)scheduleCloudSave(t,true);
+    else setCloudState(t,'error');
   }
 }
 function toast(message) {
@@ -578,10 +682,10 @@ function route() {
 }
 function renderNavigation(r) {
   const active=r.view==='review'||r.view==='project'||r.view==='edit-project'?'projects':r.view;
-  $('#navigation').innerHTML=[['home','home','홈'],['projects','folder','프로젝트'],['history','message','보낸 안내']].map(([view,symbol,label])=>`<a class="nav-item ${active===view?'active':''}" href="#${view}" ${active===view?'aria-current="page"':''}>${icon(symbol)}<span>${label}</span>${view==='home'&&pendingTickets().length?`<span class="nav-count">${pendingTickets().length}</span>`:''}</a>`).join('');
+  $('#navigation').innerHTML=[['home','home','홈'],['projects','folder','프로젝트'],['history','message','안내 기록']].map(([view,symbol,label])=>`<a class="nav-item ${active===view?'active':''}" href="#${view}" ${active===view?'aria-current="page"':''}>${icon(symbol)}<span>${label}</span>${view==='home'&&pendingTickets().length?`<span class="nav-count">${pendingTickets().length}</span>`:''}</a>`).join('');
   const projectId=r.view==='project'?r.id:r.view==='review'?getTicket(r.id).project:r.view==='edit-project'&&r.id!=='new'?r.id:null;
-  $('#sidebar-projects').innerHTML=PROJECTS.map(p=>`<a href="#project/${p.id}" class="project-shortcut ${projectId===p.id?'active':''}" ${projectId===p.id?'aria-current="page"':''}><span class="project-dot ${p.id}"></span>${p.name}</a>`).join('');
-  const title=r.view==='home'?'홈':r.view==='projects'?'프로젝트':r.view==='history'?'보낸 안내':r.view==='project'?getProject(r.id).name:r.view==='edit-project'?(r.id==='new'?'프로젝트 등록':'프로젝트 수정'):`${getProject(getTicket(r.id).project).name} / 보낼 내용 확인`;
+  $('#sidebar-projects').innerHTML=PROJECTS.filter(activeProject).map(p=>`<a href="#project/${p.id}" class="project-shortcut ${projectId===p.id?'active':''}" ${projectId===p.id?'aria-current="page"':''}><span class="project-dot ${p.id}"></span>${p.name}</a>`).join('');
+  const title=r.view==='home'?'홈':r.view==='projects'?'프로젝트':r.view==='history'?'안내 기록':r.view==='project'?getProject(r.id).name:r.view==='edit-project'?(r.id==='new'?'프로젝트 등록':'프로젝트 수정'):`${getProject(getTicket(r.id).project).name} / 보낼 내용 확인`;
   $('#breadcrumb').textContent=`운영 공간 / ${title}`;
   document.title=`${title} | 팀 행사·복지`;
 }
@@ -589,7 +693,7 @@ function heading(title,description,actions='',eyebrow='') {
   return `<div class="page-heading"><div>${eyebrow?`<p class="eyebrow">${eyebrow}</p>`:''}<h1>${title}</h1>${description?`<p class="page-description">${description}</p>`:''}</div>${actions?`<div class="actions">${actions}</div>`:''}</div>`;
 }
 function summary() {
-  return `<div class="summary-strip">${[['진행 중인 프로젝트',PROJECTS.length,'개'],['확인을 기다리는 일',pendingTickets().length,'건','orange'],['7일 안에 신청 마감',PROJECTS.filter(p=>daysLeft(p)>=0&&daysLeft(p)<=7).length,'개'],['보낸 안내',records.length,'건']].map(([label,value,unit,color])=>`<div class="summary-item"><div class="summary-label">${label}</div><div class="summary-value ${color||''}">${value}<small>${unit}</small></div></div>`).join('')}</div>`;
+  return `<div class="summary-strip">${[['진행 중인 프로젝트',PROJECTS.filter(activeProject).length,'개'],['확인을 기다리는 일',pendingTickets().length,'건','orange'],['7일 안에 신청 마감',PROJECTS.filter(p=>activeProject(p)&&daysLeft(p)>=0&&daysLeft(p)<=7).length,'개'],['안내 기록',records.length,'건']].map(([label,value,unit,color])=>`<div class="summary-item"><div class="summary-label">${label}</div><div class="summary-value ${color||''}">${value}<small>${unit}</small></div></div>`).join('')}</div>`;
 }
 function projectRows(list) {
   return list.map(p=>{
@@ -604,7 +708,7 @@ function home() {
   const list=pendingProjects();
   return `${heading('오늘 확인할 일','동료들의 신청과 안내, 오늘 필요한 일부터 챙겨요.','<a class="button" href="#projects">프로젝트 둘러보기 '+icon('arrow')+'</a>',new Date().toLocaleDateString('ko-KR',{timeZone:'Asia/Seoul',month:'long',day:'numeric',weekday:'long'}))}${sheetSourcePanel()}${summary()}
     <div class="home-top"><section class="panel" aria-labelledby="today-title"><div class="panel-heading"><div><h2 id="today-title">함께 챙길 프로젝트 <span class="count">${list.length}</span></h2><p class="caption muted">프로젝트를 열면 전체 티켓을 확인할 수 있어요.</p></div>${tag('확인 기다림','orange')}</div>${list.length?projectRows(list):'<p class="empty">오늘 확인할 일을 모두 챙겼어요.<br>프로젝트에서 다음 일정을 확인할 수 있어요.</p>'}</section>
-    <section class="panel home-recent" aria-labelledby="recent-title"><div class="panel-heading"><h2 id="recent-title">최근 보낸 안내</h2><a href="#history" class="caption muted">전체 보기 ${icon('arrow')}</a></div>${recentRows([...records].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,3))}<div class="panel-bottom">안내를 누르면 원문과 Slack 링크를 확인해요.</div></section></div>
+    <section class="panel home-recent" aria-labelledby="recent-title"><div class="panel-heading"><h2 id="recent-title">최근 안내 기록</h2><a href="#history" class="caption muted">전체 보기 ${icon('arrow')}</a></div>${recentRows([...records].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,3))}<div class="panel-bottom">안내를 누르면 원문과 Slack 링크를 확인해요.</div></section></div>
     <section class="panel" aria-labelledby="calendar-title"><div class="panel-heading"><div><h2 id="calendar-title">팀 행사와 복지 일정</h2><p class="caption muted">신청 마감부터 동료들과 함께할 날까지</p></div><div class="segmented" aria-label="일정 보기 방식"><button data-calendar-view="calendar" aria-pressed="${calendar.view==='calendar'}">캘린더</button><button data-calendar-view="list" aria-pressed="${calendar.view==='list'}">목록</button></div></div><div id="calendar-content">${calendar.view==='calendar'?calendarMarkup():projectTable()}</div></section>`;
 }
 function schedule() {
@@ -630,7 +734,8 @@ function projectTable() {
   return `<table class="project-table"><thead><tr><th scope="col">프로젝트</th><th scope="col">신청 마감</th><th scope="col">신청 현황</th><th scope="col">확인할 일</th></tr></thead><tbody>${PROJECTS.map(p=>`<tr><td><a href="#project/${p.id}">${escapeHtml(p.name)}</a></td><td>${dateLabel(p.deadline)}</td><td>${projectCount(p).registered}/${projectCount(p).total}명</td><td>${tag(`${pendingTickets(p.id).length}건`,pendingTickets(p.id).length?'orange':'green')}</td></tr>`).join('')}</tbody></table>`;
 }
 function projectsPage() {
-  return `${heading('우리 팀의 프로젝트','신청 현황과 일정, 프로젝트별 전체 티켓을 살펴봐요.',`<a class="button primary" href="#edit-project/new">${icon('plus')} 프로젝트 등록</a>`)}${summary()}<section class="panel"><div class="panel-heading"><h2>진행 중인 프로젝트 <span class="count">${PROJECTS.length}</span></h2></div>${projectRows(PROJECTS)}</section><div class="actions" style="margin-top:18px;justify-content:flex-end"><button class="button compact" data-action="reset-sample">${resetArmed?'프로젝트·신청·안내 기록을 모두 지우고 초기화 확인':'예시 데이터로 초기화'}</button></div>`;
+  const active=PROJECTS.filter(activeProject),ended=PROJECTS.filter(p=>!activeProject(p));
+  return `${heading('우리 팀의 프로젝트','신청 현황과 일정, 프로젝트별 전체 티켓을 살펴봐요.',`<a class="button primary" href="#edit-project/new">${icon('plus')} 프로젝트 등록</a>`)}${summary()}<section class="panel"><div class="panel-heading"><h2>진행 중인 프로젝트 <span class="count">${active.length}</span></h2></div>${projectRows(active)}</section>${ended.length?`<section class="panel" style="margin-top:18px"><div class="panel-heading"><h2>취소·종료된 프로젝트 <span class="count">${ended.length}</span></h2></div>${projectRows(ended)}</section>`:''}<div class="actions" style="margin-top:18px;justify-content:flex-end"><button class="button compact" data-action="reset-sample" ${cloudUser?'disabled':''}>${resetArmed?'이 브라우저의 예시 데이터 초기화 확인':'이 브라우저의 예시 데이터 초기화'}</button></div>${cloudUser?'<p class="help">서버 연결 중에는 예시 초기화를 사용할 수 없습니다. 서버 운영 정보는 보호됩니다.</p>':''}`;
 }
 function employeePickerMarkup(p) {
   const target=new Set(p?.targetIds||[]),required=new Set(p?.requiredIds||[]);
@@ -644,6 +749,30 @@ function reminderPolicyFields(p){
 function projectFormPage(id) {
   const p=id==='new'?null:getProject(id),field=(name,label,value,type='text',required=true)=>`<div class="field"><label for="project-${name}">${label}</label><input id="project-${name}" name="${name}" type="${type}" value="${escapeHtml(value??'')}" ${required?'required':''}></div>`;
   return `<a href="${p?`#project/${p.id}`:'#projects'}" class="back-link">${icon('back')} 프로젝트로 돌아가기</a>${heading(p?'프로젝트 수정':'프로젝트 등록','')}<form id="project-form" class="panel form-panel" data-project-id="${p?.id||'new'}"><section class="document-import" id="document-import"></section><div class="form-grid">${field('name','프로젝트 제목',p?.name)}${field('owner','담당자 이름',p?.owner)}<div class="field"><label for="project-sheetProjectId">${p?'프로젝트 ID':'Google Sheets 프로젝트 ID (선택)'}</label><input id="project-sheetProjectId" name="sheetProjectId" type="text" maxlength="80" value="${escapeHtml(p?.id||'')}" ${p?'readonly':''} placeholder="시트 연동 시 입력"><p class="help">${p?'등록 후에는 ID를 변경할 수 없습니다.':'시트의 프로젝트 탭 projectId와 정확히 같게 입력하세요. 비워 두면 내부 ID를 자동 생성합니다.'}</p></div><div class="field full"><label for="project-description">프로젝트 설명</label><textarea id="project-description" name="description" class="short-textarea" required>${escapeHtml(p?.description||'')}</textarea></div>${field('start','신청 시작일',p?.start||'','date')}${field('deadlineAt','신청 마감 시각',p?.deadlineAt||'','datetime-local')}${field('event','행사·운영 일정',p?.event||'','date')}${field('applicationUrl','신청 링크',p?.applicationUrl||'','url',false)}${field('location','장소',p?.location||'','text',false)}${field('audience','문서상 참여 대상',p?.audience||'','text',false)}${field('capacity','정원·선정 조건',p?.capacity||'','text',false)}<div class="field full"><label for="project-requirements">신청 방법·유의사항·행사 시간</label><textarea id="project-requirements" name="requirements" class="short-textarea">${escapeHtml(p?.requirements||'')}</textarea><p class="help">문서상 대상은 참고 정보입니다. 실제 대상 동료는 아래 명단에서 선택하세요.</p></div><div class="field"><label for="project-confirmationMode">신청 후 확정 방식</label><select id="project-confirmationMode" name="confirmationMode" required><option value="">확인 후 선택</option><option value="immediate" ${p?.confirmationMode==='immediate'?'selected':''}>신청 즉시 확정</option><option value="separate" ${p?.confirmationMode==='separate'?'selected':''}>별도 확인·승인·선정 후 확정</option></select></div><div class="field"><label for="project-type">종류</label><select id="project-type" name="type"><option value="행사" ${p?.type==='행사'?'selected':''}>행사</option><option value="복지" ${p?.type==='복지'?'selected':''}>복지</option><option value="이벤트" ${p?.type==='이벤트'?'selected':''}>이벤트</option></select></div><div class="field"><label for="project-voluntaryGoalRate">자율 신청 목표 (%)</label><input id="project-voluntaryGoalRate" name="voluntaryGoalRate" type="number" min="1" max="100" step="1" value="${p?.voluntaryGoalRate==null?'':Math.round(p.voluntaryGoalRate*100)}" placeholder="설정하지 않음"><p class="help">설정하면 D-3·D-1에 목표 미달 여부를 확인합니다.</p></div>${reminderPolicyFields(p)}<div class="field"><label for="project-lifecycle">운영 상태</label><select id="project-lifecycle" name="lifecycle"><option value="active" ${!p?.lifecycle||p.lifecycle==='active'?'selected':''}>진행 중</option><option value="cancelled" ${p?.lifecycle==='cancelled'?'selected':''}>프로젝트 취소</option><option value="closed" ${p?.lifecycle==='closed'?'selected':''}>운영 종료</option></select></div><div class="field full"><label for="project-changeReason">마감·운영 상태 변경 사유</label><input id="project-changeReason" name="changeReason" type="text" maxlength="500" placeholder="마감 연장, 프로젝트 취소, 운영 종료 시 입력"></div><div class="field full">${employeePickerMarkup(p)}</div></div><p id="project-form-error" class="error-message" role="alert" ${projectFormError?'':'hidden'}>${escapeHtml(projectFormError)}</p><div class="actions"><button class="button primary" type="submit">${p?'변경 저장':'프로젝트 등록'}</button></div></form>`;
+}
+function projectFormSignature(){
+  const form=$('#project-form');if(!form)return '';
+  return JSON.stringify({
+    fields:[...new FormData(form).entries()],
+    target:[...form.querySelectorAll('[data-target-member]:checked')].map(el=>el.dataset.targetMember),
+    required:[...form.querySelectorAll('[data-required-member]:checked')].map(el=>el.dataset.requiredMember),
+  });
+}
+function projectFormDirty(){return Boolean(projectFormBaseline&&$('#project-form')&&projectFormSignature()!==projectFormBaseline);}
+function updateRegistrationSummary(){
+  const form=$('#project-form');if(!form)return;
+  const values=new FormData(form),old=form.dataset.projectId==='new'?null:getProject(form.dataset.projectId);
+  const project={...(old||{}),name:String(values.get('name')||''),owner:String(values.get('owner')||''),
+    audience:String(values.get('audience')||''),requirements:String(values.get('requirements')||''),
+    deadlineAt:String(values.get('deadlineAt')||''),event:String(values.get('event')||''),
+    location:String(values.get('location')||''),applicationUrl:String(values.get('applicationUrl')||''),
+    sourceReviews:Object.values({...Object.fromEntries((old?.sourceReviews||[]).map(row=>[row.field,row])),...appliedFieldReviews}),
+    sourceIssues:appliedSourceIssues??old?.sourceIssues??[]};
+  const summary=buildRegistrationSummary(project);
+  const markup=`<h2>저장 전 운영 정보 요약</h2><p class="help">자료에서 가져온 값과 직접 입력한 값을 확인해주세요. 확인이 필요한 항목은 저장 후 안내 작성에서 다시 검토할 수 있습니다.</p><dl class="registration-summary-list">${summary.rows.map(row=>`<div><dt>${escapeHtml(row.label)}</dt><dd>${escapeHtml(row.value||'입력되지 않음')} <small>· ${escapeHtml(row.source)} · ${row.needsReview?'확인 필요':'확인됨'}</small></dd></div>`).join('')}</dl>`;
+  let target=$('#registration-summary');
+  if(!target){form.querySelector('.actions').insertAdjacentHTML('beforebegin','<section id="registration-summary" class="registration-summary" aria-live="polite"></section>');target=$('#registration-summary');}
+  target.innerHTML=markup;
 }
 function refreshMemberPicker() {
   const search=$('#member-search')?.value.trim().toLowerCase()||'',team=$('#member-team')?.value||'all';
@@ -661,8 +790,10 @@ function refreshMemberPicker() {
 function saveProjectForm(event) {
   event.preventDefault();if(!requireOperator())return;const form=event.target,id=form.dataset.projectId,old=id==='new'?null:getProject(id),data=new FormData(form);
   try {
+    if(operatorConflict)throw new Error('다른 탭의 운영 정보가 바뀌었습니다. 상단의 운영 정보 충돌을 먼저 확인해주세요.');
     const targetIds=[...form.querySelectorAll('[data-target-member]:checked')].map(input=>Number(input.dataset.targetMember));
     const requiredIds=[...form.querySelectorAll('[data-required-member]:checked')].map(input=>Number(input.dataset.requiredMember));
+    if(!targetIds.length)throw new Error('안내 대상 동료를 한 명 이상 선택해주세요.');
     if(requiredIds.some(employeeId=>!targetIds.includes(employeeId)))throw new Error('필수 신청 동료는 대상 명단에도 있어야 해요.');
     const start=data.get('start'),deadlineAt=data.get('deadlineAt'),eventDate=data.get('event');
     if(Date.parse(start)>Date.parse(deadlineAt)||Date.parse(eventDate)<Date.parse(start))throw new Error('신청 시작일·마감·운영 일정의 순서를 확인해주세요.');
@@ -679,26 +810,31 @@ function saveProjectForm(event) {
     const lifecycle=data.get('lifecycle'),changeReason=String(data.get('changeReason')||'').trim();
     if(old&&(old.deadlineAt!==deadlineAt||(old.lifecycle||'active')!==lifecycle)&&!changeReason)throw new Error('마감이나 운영 상태를 바꿀 때는 사유를 입력해주세요.');
     const projectId=old?.id||newProjectId(data.get('sheetProjectId'),PROJECTS.map(project=>project.id));
-    const next={...(old||{}),sourceReviews,sourceIssues:appliedSourceIssues??old?.sourceIssues??[],location:String(data.get('location')||''),audience:String(data.get('audience')||''),capacity:String(data.get('capacity')||''),requirements:String(data.get('requirements')||''),id:projectId,name,short:name,type:data.get('type'),symbol:old?.symbol||'folder',description,owner,start,deadlineAt,deadline:deadlineAt.slice(0,10),event:eventDate,eventLabel:old?.eventLabel||'운영 일정',applicationUrl:url,confirmationMode:data.get('confirmationMode'),targetIds,requiredIds,voluntaryGoalRate:goal===''?null:Number(goal)/100,reminderPolicy,lifecycle,changeLog:old?.changeLog||[],dataKind:'local',lastCheckedAt:checkedAt(),reference:appliedDocumentName||old?.reference||'직접 입력'};
+    const next={...(old||{}),sourceReviews,sourceIssues:appliedSourceIssues??old?.sourceIssues??[],location:String(data.get('location')||''),audience:String(data.get('audience')||''),capacity:String(data.get('capacity')||''),requirements:String(data.get('requirements')||''),id:projectId,name,short:name,type:data.get('type'),symbol:old?.symbol||'folder',description,owner,start,deadlineAt,deadline:deadlineAt.slice(0,10),event:eventDate,eventLabel:old?.eventLabel||'운영 일정',applicationUrl:url,confirmationMode:data.get('confirmationMode'),targetIds,requiredIds,voluntaryGoalRate:goal===''?null:Number(goal)/100,reminderPolicy,lifecycle,firstNoticeReviewAt:String(data.get('firstNoticeReviewAt')||''),createdAt:old?old.createdAt:new Date().toISOString(),changeLog:old?.changeLog||[],dataKind:'local',lastCheckedAt:checkedAt(),reference:appliedDocumentName||old?.reference||'직접 입력'};
+    evaluateFirstNoticeTicket({project:next,now:new Date().toISOString()});
     if(old&&changeReason)next.changeLog=[...next.changeLog,{at:new Date().toISOString(),actor:cloudUser?.email||'로컬 운영자',fromDeadlineAt:old.deadlineAt,toDeadlineAt:deadlineAt,fromLifecycle:old.lifecycle||'active',toLifecycle:lifecycle,reason:changeReason}];
     if(old){PROJECTS=PROJECTS.map(p=>p.id===id?next:p);if(old.dataKind==='sample')TICKETS.filter(t=>t.project===id&&!t.key&&['pending','scheduled'].includes(t.state)).forEach(t=>{t.state='retired';t.lifecycleReason='프로젝트 운영 정보 변경';});if(old.confirmationMode!==next.confirmationMode){applications=applications.map(r=>{if(r.projectId!==id||r.status==='cancelled')return r;const toStatus=next.confirmationMode==='immediate'?'confirmed':'applied';if(r.status!==toStatus)applicationEvents.push({id:crypto.randomUUID(),projectId:id,employeeId:r.employeeId,fromStatus:r.status,toStatus,reason:'프로젝트 확정 방식 변경',actor:cloudUser?.email||'로컬 운영자',at:checkedAt()});return {...r,status:toStatus};});}}
-    else {PROJECTS.push(next);TICKETS.push({id:`${next.id}-initial`,project:next.id,title:`${next.name} 첫 안내 준비`,state:'pending',date:TODAY_KST,purpose:'첫 안내',reason:'프로젝트 등록 정보와 공지용 정보 카드를 확인하고 구성원에게 첫 안내를 준비해주세요.',ruleGenerated:true});}
-    if(old)TICKETS.filter(t=>t.project===id).forEach(t=>{const d=drafts[t.id];if(!d)return;const previous=makeNoticeBrief(old),latest=makeNoticeBrief(next);for(const key of Object.keys(latest))if(d.brief?.[key]?.source!=='담당자 수정'&&d.brief?.[key]?.source!=='담당자 확인'&&d.brief[key].value===previous[key].value)d.brief[key]=latest[key];d.confirmed=false;d.briefStale=true;scheduleCloudSave(t);});
-    projectFormError='';reconcileProjectTickets(next);persist();location.hash=`project/${next.id}`;render();void refreshOfficialCalendarAndTickets();toast(old?'운영 정보를 저장했어요.':'프로젝트를 등록했어요.');
+    else PROJECTS.push(next);
+    if(old)TICKETS.filter(t=>t.project===id).forEach(t=>{const d=drafts[t.id];if(!d)return;const comparison=compareDraftProject(d,next);if(!comparison.reviewRequired)return;d.projectReviewRequired=true;d.confirmed=false;d.confirmedSignature='';scheduleCloudSave(t);});
+    projectFormError='';reconcileProjectTickets(next);persist();projectFormAllowNavigation=true;location.hash=`project/${next.id}`;render();void refreshOfficialCalendarAndTickets();toast('이 브라우저에 반영했어요. 상단에서 서버 저장 완료를 확인해주세요.');
   } catch(error) {projectFormError=error.message;$('#project-form-error').textContent=projectFormError;$('#project-form-error').hidden=false;}
 }
 function ticketMarkup(t) {
   const state=ticketState(t),recordId=completed[t.id]||t.record;
   const due=t.dueAt?new Date(t.dueAt).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}):dateLabel(t.date);
+  if(needsDeadlineReview(t)){
+    const project=getProject(t.project);
+    return `<article class="ticket expired-ticket" data-ticket-id="${escapeHtml(t.id)}"><div class="ticket-heading"><div class="ticket-title"><h3>${escapeHtml(t.title)}</h3><div class="caption muted">${escapeHtml(due)} · ${escapeHtml(t.purpose)}</div></div>${tag('기한 경과 · 재검토','orange')}</div><p class="ticket-body">신청 마감 ${dateLabel(project.deadline)} ${escapeHtml(project.deadlineAt.slice(11))}이 지났습니다. 마감 연장 여부를 확인하기 전에는 이 신청 안내를 실행할 수 없어요.</p><div class="ticket-footer"><a class="button compact" href="#edit-project/${escapeHtml(project.id)}">마감 정보 확인</a>${state==='pending'?`<a class="button compact" href="#review/${encodeURIComponent(t.id)}">초안 보기</a>`:''}</div></article>`;
+  }
   return `<article class="ticket" data-ticket-id="${escapeHtml(t.id)}"><div class="ticket-heading"><span class="ticket-status-icon ${state}" aria-hidden="true">${state==='done'?'✓':state==='scheduled'?'◷':'•'}</span><div class="ticket-title"><h3>${escapeHtml(t.title)}</h3><div class="caption muted">${escapeHtml(due)} · ${escapeHtml(t.purpose)} ${t.ruleGenerated?'· 규칙 생성':'· 예시 티켓'}</div></div>${tag(stateLabel(state),stateColor(state))}</div><p class="ticket-body">${escapeHtml(t.ruleGenerated?t.reason:state==='done'?'완료된 예시 티켓이에요. 당시 보낸 안내의 원문과 기록을 확인할 수 있어요.':t.reason)}${t.originalTimes?.some(time=>time!==t.dueAt)?`<br><small>원래 점검 시각 ${escapeHtml(new Date(t.originalTimes[0]).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}))} → 공휴일·업무시간 조정 ${escapeHtml(due)}</small>`:''}${t.decisionReason?`<br><small>운영자 사유: ${escapeHtml(t.decisionReason)}${t.reviewAt?` · 다시 확인 ${escapeHtml(t.reviewAt)}`:''}</small>`:''}</p><div class="ticket-footer"><span>${state==='pending'?'담당자 확인 후 안내해요':state==='scheduled'?'예정 시각에 신청 현황을 확인해요':state==='done'?'안내 기록과 연결되어 있어요':''}</span><div class="actions">${state==='pending'?`<a href="#review/${encodeURIComponent(t.id)}" class="button compact">보낼 내용 확인 ${icon('arrow')}</a>`:''}${t.ruleGenerated&&['pending','scheduled','deferred'].includes(state)?`<button class="button compact" data-ticket-decision="deferred" data-ticket-id="${escapeHtml(t.id)}">보류</button><button class="button compact" data-ticket-decision="dismissed" data-ticket-id="${escapeHtml(t.id)}">안내하지 않기</button>`:''}${state==='done'&&recordId?`<button class="button compact" data-record="${escapeHtml(recordId)}">보낸 안내 보기 ${icon('external')}</button>`:''}</div></div></article>`;
 }
 const applicationStateLabel = state => ({none:'미신청',applied:'신청 · 확정 대기',confirmed:'확정',cancelled:'신청 취소'}[state]||state);
 function applicationLog(projectId) {
   const events=applicationEvents.map((event,index)=>({event,index})).filter(item=>item.event.projectId===projectId).sort((a,b)=>b.event.at.localeCompare(a.event.at)||b.index-a.index).map(item=>item.event);
-  return `<details class="application-log"><summary>신청 상태 변경 기록 <span class="count">${events.length}</span></summary><p class="help">Supabase 계정의 변경 이력입니다. 저장 상태는 상단에서 확인할 수 있어요.</p>${events.length?events.map(e=>{const person=EMPLOYEES.find(item=>item.id===e.employeeId),team=TEAMS.find(item=>item.id===person?.team);return `<div class="application-log-row"><div><strong>${escapeHtml(person?.name)} · ${escapeHtml(team?.name)}</strong><span>${escapeHtml(applicationStateLabel(e.fromStatus))} → ${escapeHtml(applicationStateLabel(e.toStatus))}${e.reason?` · 사유: ${escapeHtml(e.reason)}`:''}</span></div><time datetime="${escapeHtml(e.at)}">${escapeHtml(e.at.replace('T',' '))}<small>${escapeHtml(e.actor)}</small></time></div>`;}).join(''):'<p class="help">아직 변경한 신청 상태가 없어요.</p>'}</details>`;
+  return `<details class="application-log"><summary>신청 상태 변경 기록 <span class="count">${events.length}</span></summary><p class="help">관리자 계정의 변경 이력입니다. 저장 상태는 상단에서 확인할 수 있어요.</p>${events.length?events.map(e=>{const person=EMPLOYEES.find(item=>item.id===e.employeeId),team=TEAMS.find(item=>item.id===person?.team);return `<div class="application-log-row"><div><strong>${escapeHtml(person?.name)} · ${escapeHtml(team?.name)}</strong><span>${escapeHtml(applicationStateLabel(e.fromStatus))} → ${escapeHtml(applicationStateLabel(e.toStatus))}${e.reason?` · 사유: ${escapeHtml(e.reason)}`:''}</span></div><time datetime="${escapeHtml(e.at)}">${escapeHtml(e.at.replace('T',' '))}<small>${escapeHtml(e.actor)}</small></time></div>`;}).join(''):'<p class="help">아직 변경한 신청 상태가 없어요.</p>'}</details>`;
 }
 function historyRows(list) {
-  return list.length?list.map(r=>`<button class="history-list-row" data-record="${escapeHtml(r.id)}"><span class="history-symbol">${icon('message')}</span><div><h3>${escapeHtml(r.title)}</h3><p>${escapeHtml(r.route)} · ${recordDate(r.date)}</p><div class="history-link-indicator">${r.source==='manual'?'직접 추가한 기록':r.source==='simulated'?'보내기 예시':'예시 원문'} · ${r.url?'Slack 연결':'원문 보기'}</div></div><span class="chevron">${icon('arrow')}</span></button>`).join(''):'<div class="empty">아직 보낸 안내가 없어요.<br>첫 안내를 보내거나 기존 안내 기록을 추가해보세요.</div>';
+  return list.length?list.map(r=>`<button class="history-list-row" data-record="${escapeHtml(r.id)}"><span class="history-symbol">${icon('message')}</span><div><h3>${escapeHtml(r.title)}</h3><p>${escapeHtml(r.route)} · ${recordDate(r.date)}</p><div class="history-link-indicator">${r.source==='manual'?'직접 추가한 기록':r.source==='simulated'?'보내기 예시':'예시 원문'} · ${r.url?'Slack 연결':'원문 보기'}</div></div><span class="chevron">${icon('arrow')}</span></button>`).join(''):'<div class="empty">아직 안내 기록이 없어요.<br>기존에 보낸 안내를 직접 추가할 수 있어요.</div>';
 }
 const recordKind = r => r.kind || (/D-\d|리마인드|마감 전|추가 안내|한 번 더/.test(`${r.title} ${getTicket(r.ticket)?.title||''}`)?'reminder':'initial');
 function rosterMarkup(p,s) {
@@ -722,27 +858,43 @@ function projectPage(id) {
     ${p.lifecycle&&p.lifecycle!=='active'?`<p class="error-message">${p.lifecycle==='cancelled'?'취소된 프로젝트입니다.':'운영이 종료된 프로젝트입니다.'} 새 안내 티켓은 만들지 않습니다.</p>`:''}${holidayError&&p.dataKind!=='sample'?`<p class="error-message">자동 티켓: ${escapeHtml(holidayError)}</p>`:''}${officialCalendar&&p.dataKind!=='sample'?`<p class="caption muted">공휴일 기준: ${escapeHtml(officialCalendar.source)} · ${escapeHtml(new Date(officialCalendar.checkedAt).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}))} 조회</p>`:''}<section class="application-summary" aria-label="필수·자율 신청 현황"><div class="application-summary-heading"><div><h2>신청 현황</h2><p>필수와 자율 신청을 나눠 집계했어요. 각 행의 신청 + 신청 전 = 대상입니다.</p></div><strong>${s.rate===null?'대상 없음':Math.round(s.rate*100)+'%'}<small> 전체 신청률</small></strong></div><div class="summary-table-wrap"><table class="application-table"><thead><tr><th scope="col">구분</th><th scope="col">대상</th><th scope="col">신청</th><th scope="col">신청 전</th></tr></thead><tbody>${[['필수 신청',breakdown.required],['자율 신청',breakdown.voluntary],['합계',breakdown.total]].map(([label,row])=>`<tr${label==='합계'?' class="total-row"':''}><th scope="row">${label}</th><td>${row.target}명</td><td>${row.applied}명</td><td class="pending-count">${row.pending}명</td></tr>`).join('')}</tbody></table></div><p class="application-summary-note">신청에는 확정 대기 중인 동료도 포함됩니다. 취소한 신청은 ‘신청 전’으로 집계합니다.</p></section>
     ${rosterMarkup(p,s)}
     <div class="tabs" role="tablist" aria-label="프로젝트 내용"><button class="tab" id="tickets-tab" role="tab" data-tab="tickets" aria-selected="${activeTab==='tickets'}" aria-controls="project-content">전체 티켓 <span class="count">${tickets.length}</span></button><button class="tab" id="sent-tab" role="tab" data-tab="history" aria-selected="${activeTab==='history'}" aria-controls="project-content">보낸 안내 <span class="count">${recent.length}</span></button></div>
-    <div id="project-content" role="tabpanel" aria-labelledby="${activeTab==='tickets'?'tickets-tab':'sent-tab'}">${activeTab==='history'?`<section class="panel">${historyRows(recent)}</section>`:`<div class="detail-grid"><section class="panel" aria-label="${escapeHtml(p.name)} 전체 티켓"><div class="panel-heading"><div><h2>프로젝트의 모든 티켓</h2><p class="caption muted">확인 대기 ${pending}건 · 예정 ${tickets.filter(t=>ticketState(t)==='scheduled').length}건 · 완료 ${tickets.filter(t=>ticketState(t)==='done').length}건</p></div></div>${sorted.map(ticketMarkup).join('')||'<p class="empty">현재 확인할 티켓이 없어요.</p>'}</section><aside><section class="panel schedule-panel"><h2>일정과 최근 안내</h2><div class="info-line"><span>신청 마감</span><p>${dateLabel(p.deadline)} ${escapeHtml(p.deadlineAt.slice(11))} ${tag(`D-${daysLeft(p)}`,daysLeft(p)<=3?'orange':'gray')}</p></div><div class="info-line"><span>${p.type==='행사'?'행사일':escapeHtml(p.eventLabel||'운영 일정')}</span><p>${dateLabel(p.event)}</p></div><div class="info-line"><span>담당자</span><p>${escapeHtml(p.owner)}</p></div><div class="info-line"><span>신청 링크</span><p>${p.applicationUrl?`<a href="${escapeHtml(p.applicationUrl)}" target="_blank" rel="noopener noreferrer">신청 페이지 열기</a>`:'등록 전'}</p></div><h3 style="margin:18px 0 12px">최근 보낸 안내</h3>${recent.slice(0,2).map(r=>`<button class="linked-history" data-record="${escapeHtml(r.id)}" aria-label="${escapeHtml(r.title)} 원문 보기"><div><strong>${escapeHtml(r.title)}</strong><small>${recordDate(r.date)} · ${escapeHtml(r.route)}</small></div>${icon('arrow')}</button>`).join('')||'<p class="caption muted">아직 보낸 안내가 없어요.</p>'}</section></aside></div>`}</div>`;
+    <div id="project-content" role="tabpanel" aria-labelledby="${activeTab==='tickets'?'tickets-tab':'sent-tab'}">${activeTab==='history'?`<section class="panel">${historyRows(recent)}</section>`:`<div class="detail-grid"><section class="panel" aria-label="${escapeHtml(p.name)} 전체 티켓"><div class="panel-heading"><div><h2>프로젝트의 모든 티켓</h2><p class="caption muted">확인 대기 ${pending}건 · 예정 ${tickets.filter(t=>ticketState(t)==='scheduled'&&!needsDeadlineReview(t)).length}건 · 기한 경과 ${tickets.filter(needsDeadlineReview).length}건 · 완료 ${tickets.filter(t=>ticketState(t)==='done').length}건</p></div></div>${sorted.map(ticketMarkup).join('')||'<p class="empty">현재 확인할 티켓이 없어요.</p>'}</section><aside><section class="panel schedule-panel"><h2>일정과 최근 안내</h2><div class="info-line"><span>신청 마감</span><p>${dateLabel(p.deadline)} ${escapeHtml(p.deadlineAt.slice(11))} ${tag(deadlineLabel(p),daysLeft(p)<=3?'orange':'gray')}</p></div><div class="info-line"><span>${p.type==='행사'?'행사일':escapeHtml(p.eventLabel||'운영 일정')}</span><p>${dateLabel(p.event)}</p></div><div class="info-line"><span>담당자</span><p>${escapeHtml(p.owner)}</p></div><div class="info-line"><span>신청 링크</span><p>${p.applicationUrl?`<a href="${escapeHtml(p.applicationUrl)}" target="_blank" rel="noopener noreferrer">신청 페이지 열기</a>`:'등록 전'}</p></div><h3 style="margin:18px 0 12px">최근 보낸 안내</h3>${recent.slice(0,2).map(r=>`<button class="linked-history" data-record="${escapeHtml(r.id)}" aria-label="${escapeHtml(r.title)} 원문 보기"><div><strong>${escapeHtml(r.title)}</strong><small>${recordDate(r.date)} · ${escapeHtml(r.route)}</small></div>${icon('arrow')}</button>`).join('')||'<p class="caption muted">아직 보낸 안내가 없어요.</p>'}</section></aside></div>`}</div>`;
 }
 function historyPage() {
   const projects=PROJECTS.filter(p=>historyFilter==='all'||p.id===historyFilter);
-  const list=records.filter(r=>projects.some(p=>p.id===r.project)).sort((a,b)=>b.date.localeCompare(a.date));
-  return `${heading('보낸 안내','',`<button class="button" data-action="new-record">${icon('plus')} 안내 기록 추가</button>`)}<div class="history-toolbar"><strong>안내 ${list.length}건</strong><div class="field"><label for="history-project">프로젝트</label><select id="history-project"><option value="all">전체 프로젝트</option>${PROJECTS.map(p=>`<option value="${p.id}" ${historyFilter===p.id?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select></div></div><div class="history-projects">${projects.map(p=>{const projectList=list.filter(r=>r.project===p.id);return `<section class="panel history-project" aria-label="${escapeHtml(p.name)} 안내 기록"><div class="history-project-heading">${projectSymbol(p)}<div><span class="history-project-sticker">${escapeHtml(p.type)}</span><h2><a href="#project/${p.id}">${escapeHtml(p.name)} ${icon('arrow')}</a></h2></div><span class="count">${projectList.length}</span></div>${projectList.length?['initial','reminder'].map(kind=>{const items=projectList.filter(r=>recordKind(r)===kind);return items.length?`<div class="history-group"><h3>${kind==='initial'?'첫 안내':'추가 안내'} <span class="count">${items.length}</span></h3>${historyRows(items)}</div>`:'';}).join(''):'<p class="history-empty">아직 보낸 안내가 없습니다.</p>'}</section>`;}).join('')}</div>`;
+  const list=records.filter(r=>projects.some(p=>p.id===r.project)&&(historySourceFilter==='all'||r.source===historySourceFilter)).sort((a,b)=>b.date.localeCompare(a.date));
+  return `${heading('안내 기록','',`<button class="button" data-action="new-record">${icon('plus')} 안내 기록 추가</button>`)}<div class="history-toolbar"><strong>안내 ${list.length}건</strong><div class="field"><label for="history-project">프로젝트</label><select id="history-project"><option value="all">전체 프로젝트</option>${PROJECTS.map(p=>`<option value="${p.id}" ${historyFilter===p.id?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select></div></div><div class="history-projects">${projects.map(p=>{const projectList=list.filter(r=>r.project===p.id);return `<section class="panel history-project" aria-label="${escapeHtml(p.name)} 안내 기록"><div class="history-project-heading">${projectSymbol(p)}<div><span class="history-project-sticker">${escapeHtml(p.type)}</span><h2><a href="#project/${p.id}">${escapeHtml(p.name)} ${icon('arrow')}</a></h2></div><span class="count">${projectList.length}</span></div>${projectList.length?['initial','reminder'].map(kind=>{const items=projectList.filter(r=>recordKind(r)===kind);return items.length?`<div class="history-group"><h3>${kind==='initial'?'첫 안내':'추가 안내'} <span class="count">${items.length}</span></h3>${historyRows(items)}</div>`:'';}).join(''):'<p class="history-empty">아직 보낸 안내가 없습니다.</p>'}</section>`;}).join('')}</div>`;
 }
-function noticeCardMarkup(d){
+function noticeSummaryRows(d){
   const labels={confirmed:'확인됨',needs_review:'확인 필요',conflict:'자료 간 충돌',missing:'내용 없음'};
-  return `<section class="notice-card panel" aria-labelledby="notice-card-title"><div class="notice-card-heading"><div><p class="eyebrow">공지용 정보 카드</p><h2 id="notice-card-title">구성원이 행동할 정보</h2><p class="help">자료의 근거를 확인하고 필요한 항목만 포함하세요. 확인이 필요한 항목은 초안에 보내지 않습니다.</p>${d.briefStale?'<p class="error-message">프로젝트 정보나 카드가 바뀌었습니다. 확인한 뒤 초안을 다시 생성해주세요.</p>':''}</div><button class="button primary" data-action="generate-notice" ${cloudUser?'':'disabled'}>Gemini로 초안 생성</button></div><div class="notice-card-grid">${Object.entries(BRIEF_LABELS).map(([key,label])=>{const item=d.brief[key],status=item.status||'needs_review',evidence=item.evidence||[];return `<div class="notice-card-field ${['what','action','deadline'].includes(key)?'essential':''}"><div class="notice-card-field-head"><label for="brief-${key}">${label}</label><label class="brief-include"><input type="checkbox" data-brief-include="${key}" ${item.included?'checked':''}>공지에 포함</label></div><textarea id="brief-${key}" data-brief-field="${key}" rows="${['action','method','exception'].includes(key)?3:2}" maxlength="2000" placeholder="${['cost','exception'].includes(key)?'자료에 없으면 비워두세요':'내용을 입력하세요'}">${escapeHtml(item.value)}</textarea><div class="brief-status"><span class="tag ${status==='confirmed'?'green':'orange'}" data-brief-status="${key}">${labels[status]||labels.needs_review}</span>${status!=='confirmed'&&item.value.trim()?`<button type="button" class="button compact" data-brief-confirm="${key}">내용 확인 완료</button>`:''}</div><small data-brief-source="${key}">${escapeHtml(item.source||'확인 필요')}</small>${evidence.length?`<details class="brief-evidence"><summary>원문 근거 ${evidence.length}개</summary>${evidence.map(e=>`<blockquote><cite>${escapeHtml(e.sourceName)} · ${escapeHtml(e.location)}${e.method==='ocr'?' · OCR':''}</cite><br>${escapeHtml(e.quote)}</blockquote>`).join('')}</details>`:''}</div>`;}).join('')}</div><p class="help">무엇을·해야 할 일·마감은 확인된 값이 있어야 초안을 만들 수 있습니다. AI가 만든 본문도 보내기 전에 검토해야 합니다.</p></section>`;
+  return Object.entries(BRIEF_LABELS).map(([key,label])=>{
+    const item=d.brief[key]||{},status=item.status||'needs_review';
+    return `<div data-summary-field="${key}"><dt>${escapeHtml(label)} ${item.included?'':'· 이번 안내에서 제외'}</dt><dd>${escapeHtml(item.value||'입력되지 않음')} <small>· ${escapeHtml(item.source||'확인 필요')} · ${labels[status]||labels.needs_review}</small></dd></div>`;
+  }).join('');
 }
-const noticeKind = t => t.purpose==='첫 안내'?'initial':/D-\d|마감|마지막/.test(t.title)?'deadline':/리마인드|다시|추가|한 번 더/.test(t.title)?'reminder':'initial';
+function refreshNoticeSummary(t){const target=$('#notice-summary-list');if(target)target.innerHTML=noticeSummaryRows(getDraft(t));}
+function noticeCardMarkup(d,p){
+  const labels={confirmed:'확인됨',needs_review:'확인 필요',conflict:'자료 간 충돌',missing:'내용 없음'};
+  const fields=Object.entries(BRIEF_LABELS).map(([key,label])=>{
+    const item=d.brief[key],status=item.status||'needs_review',evidence=item.evidence||[];
+    return `<div class="notice-card-field ${['what','action','deadline'].includes(key)?'essential':''}"><div class="notice-card-field-head"><label for="brief-${key}">${label}</label><label class="brief-include"><input type="checkbox" data-brief-include="${key}" ${item.included?'checked':''}>공지에 포함</label></div><textarea id="brief-${key}" data-brief-field="${key}" rows="${['action','method','exception'].includes(key)?3:2}" maxlength="2000" placeholder="${['cost','exception'].includes(key)?'자료에 없으면 비워두세요':'내용을 입력하세요'}">${escapeHtml(item.value)}</textarea><div class="brief-status"><span class="tag ${status==='confirmed'?'green':'orange'}" data-brief-status="${key}">${labels[status]||labels.needs_review}</span>${status!=='confirmed'&&item.value.trim()?`<button type="button" class="button compact" data-brief-confirm="${key}">내용 확인 완료</button>`:''}</div><small data-brief-source="${key}">${escapeHtml(item.source||'확인 필요')}</small>${evidence.length?`<details class="brief-evidence"><summary>원문 근거 ${evidence.length}개</summary>${evidence.map(e=>`<blockquote><cite>${escapeHtml(e.sourceName)} · ${escapeHtml(e.location)}${e.method==='ocr'?' · OCR':''}</cite><br>${escapeHtml(e.quote)}</blockquote>`).join('')}</details>`:''}</div>`;
+  }).join('');
+  return `<section class="notice-card panel" aria-labelledby="notice-card-title"><div class="notice-card-heading"><div><p class="eyebrow">현재 프로젝트 정보로 준비</p><h2 id="notice-card-title">이번 안내의 정보</h2><p class="help">새 안내는 저장된 프로젝트 값에서 시작합니다. 이번 안내에만 필요한 내용은 아래에서 수정할 수 있습니다.</p>${d.briefStale&&d.body.trim()?'<p class="error-message">정보가 바뀌었습니다. 아래의 본문을 다시 확인하거나 새 문구를 생성해주세요.</p>':''}</div><a class="button compact" href="#edit-project/${encodeURIComponent(p.id)}">프로젝트 정보 수정</a></div><dl id="notice-summary-list" class="notice-summary-list">${noticeSummaryRows(d)}</dl><details class="notice-card-editor"><summary>이번 안내만 수정·근거 보기</summary><div class="notice-card-grid">${fields}</div></details><p class="help">무엇을·해야 할 일·마감의 확인된 값이 있어야 Gemini로 문구를 만들 수 있습니다. 정보 확인 후 아래 생성 버튼을 누르세요.</p></section>`;
+}
+
+const noticeKind = t => t.kind==='initial'||t.purpose==='첫 안내'?'initial'
+  :t.kind==='deadline'||/D-\d|마감|마지막/.test(`${t.title} ${t.purpose}`)?'deadline'
+  :t.kind==='reminder'||/리마인드|다시|추가|한 번 더|필수 참여/.test(`${t.title} ${t.purpose}`)
+    ||projectRecords(t.project).some(record=>recordKind(record)==='initial')?'reminder':'initial';
 function getDraft(t) {
-  if(!drafts[t.id])drafts[t.id]={body:'',purpose:noticeKind(t),tone:'friendly',mode:'dm',scope:t.project==='event'?'project':'pending',teams:TEAMS.map(t=>t.id),dmSelection:'team',selectedIds:[],channels:[],confirmed:false,confirmedSignature:'',confirmedSourceSnapshot:'',confirmedSpreadsheetId:'',resources:[],brief:makeNoticeBrief(getProject(t.project)),briefStale:false,_cloudVersion:0,_cloudRevision:0,_cloudDirty:false};
+  if(!drafts[t.id])drafts[t.id]=prepareNoticeDraft(getProject(t.project),{body:'',purpose:noticeKind(t),tone:'friendly',mode:'dm',scope:t.project==='event'?'project':'pending',teams:TEAMS.map(t=>t.id),dmSelection:'team',selectedIds:[],channels:[],confirmed:false,confirmedSignature:'',confirmedSourceSnapshot:'',confirmedSpreadsheetId:'',resources:[],briefStale:false,_cloudVersion:0,_cloudRevision:0,_cloudDirty:false});
   const fallback=makeNoticeBrief(getProject(t.project));
   if(!drafts[t.id].brief||typeof drafts[t.id].brief!=='object')drafts[t.id].brief=fallback;
   else for(const key of Object.keys(fallback)){
     const item=drafts[t.id].brief[key];
     if(typeof item?.value!=='string'||typeof item?.included!=='boolean')drafts[t.id].brief[key]=fallback[key];
     else if(!['confirmed','needs_review','conflict','missing'].includes(item.status)){
-      item.status=item.source==='담당자 수정'&&item.value.trim()?'confirmed':item.value===fallback[key].value?fallback[key].status:'needs_review';
+      item.status=item.source==='담당자 수정'&&item.value.trim()?'needs_review':item.value===fallback[key].value?fallback[key].status:'needs_review';
       item.evidence=item.source==='담당자 수정'||item.value!==fallback[key].value?[]:fallback[key].evidence;
     }
   }
@@ -753,31 +905,73 @@ function noticeContext(t){
   const input={projectTitle:p.name,card:d.brief,tone:d.tone,kind:d.purpose};
   return {input,signature:generationSignature(input,recipients)};
 }
-function noticeCandidateMarkup(t){
-  const state=noticeStates.get(t.id),candidate=state?.candidate;
-  if(!candidate)return '<div id="notice-comparison" aria-live="polite"></div>';
-  const stale=candidate.signature!==noticeContext(t).signature;
-  return `<div id="notice-comparison" class="notice-candidate" aria-live="polite"><h3>새 초안과 현재 본문 비교</h3><p class="help">현재 본문은 새 초안을 선택하기 전까지 유지됩니다.${stale?' 작성 기준이나 대상이 바뀌어 이 결과는 적용할 수 없습니다.':''}</p><div class="message-original">${escapeHtml(candidate.body)}</div><div class="actions"><button class="button primary" data-action="accept-notice" ${stale?'disabled':''}>새 초안으로 교체</button><button class="button" data-action="discard-notice">현재 본문 유지</button></div></div>`;
+function noticeGenerationPreviewMarkup(t){
+  if(getDraft(t).projectReviewRequired||compareDraftProject(getDraft(t),getProject(t.project)).reviewRequired)
+    return '<section id="notice-generation-preview" class="notice-generation-preview"><h3>이번 초안에 사용할 정보</h3><p class="help">바뀐 프로젝트 정보를 먼저 확인해주세요.</p></section>';
+  let content;
+  try{
+    const prepared=prepareNoticeGeneration(noticeContext(t).input);
+    content=`<p class="help">Gemini에는 다음의 확인된 정보만 보냅니다. 수신자 명단과 첨부 파일은 포함하지 않습니다.</p><ul>${prepared.preview.map(item=>`<li><strong>${escapeHtml(item.label)}</strong> ${escapeHtml(item.value)}</li>`).join('')}</ul>`;
+  }catch(error){
+    const brief=getDraft(t).brief;
+    const first=['what','action','deadline'].find(key=>!brief[key]?.included||!brief[key]?.value?.trim()||brief[key]?.status!=='confirmed');
+    content=`<p class="error-message">${escapeHtml(error.message)}</p>${first?`<button class="button compact" data-action="edit-required-brief" data-field="${first}">${escapeHtml(BRIEF_LABELS[first])} 입력·확인하기</button>`:''}`;
+  }
+  return `<section id="notice-generation-preview" class="notice-generation-preview" aria-live="polite"><h3>이번 초안에 사용할 정보</h3>${content}</section>`;
 }
-function refreshNoticeCandidate(t){
-  const target=$('#notice-comparison');
-  if(target)target.outerHTML=noticeCandidateMarkup(t);
+function refreshNoticeGenerationPreview(t){
+  const target=$('#notice-generation-preview');
+  if(target)target.outerHTML=noticeGenerationPreviewMarkup(t);
+}
+function noticeUndoMarkup(t){
+  const state=noticeStates.get(t.id),d=getDraft(t);
+  const available=state?.generatedBody===d.body&&state.previous.body!==d.body;
+  return `<div id="notice-undo" aria-live="polite">${available?'<button type="button" class="button compact" data-action="undo-generated-notice">생성 전 본문으로 되돌리기</button>':''}</div>`;
+}
+function refreshNoticeUndo(t){
+  const target=$('#notice-undo');
+  if(target)target.outerHTML=noticeUndoMarkup(t);
+}
+function directBodyReviewMarkup(d){
+  return `<div id="direct-body-review" aria-live="polite">${d.briefStale&&d.body.trim()?'<p class="help">정보 카드가 바뀌었습니다. 직접 작성한 본문에 최신 정보가 반영됐는지 확인해주세요.</p><button type="button" class="button compact" data-action="confirm-direct-body">직접 작성한 본문 확인 완료</button>':''}</div>`;
+}
+function refreshDirectBodyReview(t){
+  const target=$('#direct-body-review');
+  if(target)target.outerHTML=directBodyReviewMarkup(getDraft(t));
 }
 async function generateNoticeDraft(t){
-  if(!cloudUser){toast('Gemini 초안을 만들려면 Supabase에 로그인해주세요.');return;}
-  const d=getDraft(t);
-  if(['what','action','deadline'].some(key=>!d.brief[key]?.included||!d.brief[key]?.value.trim()||d.brief[key]?.status!=='confirmed')){toast('무엇을, 해야 할 일, 마감을 카드에서 확인 완료해주세요.');return;}
-  if(Object.values(d.brief).some(item=>item.included&&item.value.trim()&&item.status!=='confirmed')){toast('포함할 카드 항목의 충돌·확인 필요 상태를 먼저 해결하거나 제외해주세요.');return;}
+  if(!cloudUser){toast('Gemini 초안을 만들려면 관리자 계정으로 로그인해주세요.');return;}
+  if(getDraft(t).projectReviewRequired||compareDraftProject(getDraft(t),getProject(t.project)).reviewRequired){toast('바뀐 프로젝트 정보를 먼저 확인해주세요.');return;}
+  try{prepareNoticeGeneration(noticeContext(t).input);}catch(error){openRequiredBriefField(t);toast(error.message);return;}
   const {input,signature}=noticeContext(t),button=$('[data-action="generate-notice"]');
+  const d=getDraft(t),startedRevision=d._cloudRevision||0;
+  const previous={body:d.body,generatedAt:d.generatedAt||null,generatedModel:d.generatedModel||null,briefStale:d.briefStale===true};
   if(button){button.disabled=true;button.textContent='Gemini가 작성 중…';}
   try{
     const result=await cloudRequest('/api/notices/generate',{method:'POST',body:input});
-    if(signature!==noticeContext(t).signature){toast('정보 카드나 대상이 바뀌어 이전 생성 결과를 적용하지 않았어요.');return;}
-    noticeStates.set(t.id,{candidate:{body:result.body,model:result.model,generatedAt:result.generatedAt,signature}});
-    if(route().view==='review'&&route().id===t.id)refreshNoticeCandidate(t);
-    toast('새 초안을 만들었어요. 현재 본문과 비교한 뒤 선택해주세요.');
+    if(route().view!=='review'||route().id!==t.id||signature!==noticeContext(t).signature||d.body!==previous.body||(d._cloudRevision||0)!==startedRevision){
+      toast('생성 중 화면의 정보나 본문이 바뀌어 결과를 덮어쓰지 않았어요. 다시 생성해주세요.');return;
+    }
+    if(!acceptNoticeCandidate(d,{body:result.body,model:result.model,generatedAt:result.generatedAt,signature},signature)){
+      toast('생성된 문구를 적용하지 못했어요. 다시 시도해주세요.');return;
+    }
+    noticeStates.set(t.id,{previous,generatedBody:d.body,signature});
+    $('#draft-body').value=d.body;
+    $('.draft-area .tag').textContent='Gemini 초안';
+    updateApproval(t);
+    toast('새 초안을 메시지 본문에 넣었어요. 내용을 확인하고 필요하면 수정해주세요.');
   }catch(error){toast(error.message);}
-  finally{if(button?.isConnected){button.disabled=false;button.textContent='Gemini로 초안 다시 생성';}}
+  finally{if(button?.isConnected){button.disabled=false;button.textContent='Gemini로 새 초안 문구 생성';}}
+}
+function openRequiredBriefField(t,field){
+  const brief=getDraft(t).brief;
+  const key=field||['what','action','deadline'].find(item=>!brief[item]?.included||!brief[item]?.value?.trim()||brief[item]?.status!=='confirmed');
+  if(!key)return;
+  const details=$('.notice-card-editor');
+  if(details)details.open=true;
+  const input=$(`#brief-${key}`);
+  input?.scrollIntoView({block:'center',behavior:'smooth'});
+  input?.focus({preventScroll:true});
 }
 function audience(p,d) {
   const s=status(p),target=new Set(s.targetIds),pending=new Set(s.pendingIds);
@@ -808,17 +1002,53 @@ function sheetReviewReminder(p) {
   const last=sheetSync?.lastSuccessAt?new Date(sheetSync.lastSuccessAt).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}):null;
   return `<section class="panel sheet-source-panel" aria-label="신청 현황 확인"><div><h2>발송 전 신청 현황을 확인해주세요</h2><p class="caption muted">Supabase의 마지막 성공한 동기화 시각: ${last?escapeHtml(last):'아직 가져오지 않음'}</p><p class="caption muted">보내기 직전에도 시트 원본을 다시 확인하고, 변경됐다면 본문과 대상을 다시 검토하도록 멈춥니다.</p>${!cloudUser?'<p class="caption muted">시트를 읽으려면 먼저 로그인해주세요.</p>':''}${sheetSyncError?`<p class="error-message" role="alert">${escapeHtml(sheetSyncError)}</p>`:''}</div><button type="button" class="button" data-action="sync-sheet" ${sheetSyncBusy||!sheetSourceStatus.configured||!cloudUser?'disabled':''}>${sheetSyncBusy?'가져오는 중…':'신청 현황 새로고침'}</button></section>`;
 }
+function normalizedSelectedResources(t){
+  return (getDraft(t).resources||[]).map(item=>({...item,projectId:item.projectId||t.project,
+    scope:item.scope||'notice',ticketId:item.scope==='project'?null:item.ticketId||t.id,
+    version:Number.isInteger(item.version)?item.version:1}));
+}
+function resourcePickerMarkup(t){
+  const selected=new Set((getDraft(t).resources||[]).map(item=>item.id));
+  const available=latestProjectResources(getProject(t.project).noticeResources||[],t.project)
+    .filter(item=>!selected.has(item.id));
+  return `<div class="project-resource-picker"><h4>프로젝트 공통 자료</h4>${available.length
+    ?available.map(item=>`<div class="draft-resource"><span>${item.kind==='file'?'📎':'🔗'} ${escapeHtml(item.label)} · 버전 ${item.version}</span><button class="button compact" data-select-project-resource="${escapeHtml(item.id)}">이번 안내에 사용</button></div>`).join('')
+    :'<p class="help">선택할 프로젝트 공통 자료가 없어요.</p>'}</div>`;
+}
+function projectReviewMarkup(t){
+  const d=getDraft(t),comparison=compareDraftProject(d,getProject(t.project));
+  if(!d.projectReviewRequired&&!comparison.reviewRequired)return '';
+  const fields={name:'제목',audience:'대상',event:'운영 날짜',eventLabel:'운영 일정 이름',location:'장소',deadlineAt:'신청 마감',requirements:'신청 방법·유의사항',applicationUrl:'신청 링크',owner:'담당자'};
+  const changes=comparison.changed.map(item=>`<li><strong>${escapeHtml(fields[item.field]||item.field)}</strong><span>이전: ${escapeHtml(item.previous||'없음')}</span><span>현재: ${escapeHtml(item.current||'없음')}</span></li>`).join('');
+  return `<section class="project-review" role="alert"><h2>프로젝트 정보가 바뀌었습니다</h2><p class="help">최신 운영 정보를 확인한 뒤 이번 안내에 적용해주세요. 기존 본문·자료·대상은 유지됩니다.</p>${comparison.legacy?'<p class="help">이 초안에는 이전 프로젝트 정보가 없어 전체 내용을 확인해야 합니다.</p>':''}${changes?`<ul>${changes}</ul>`:''}<button class="button" data-action="accept-project-review">최신 운영 정보 적용</button></section>`;
+}
 function reviewPage(id) {
   const t=getTicket(id),p=getProject(t.project),d=getDraft(t);
   const resources=(d.resources||[]).map((item,index)=>`<div class="draft-resource"><span>${item.kind==='file'?'📎':'🔗'} ${escapeHtml(item.label)}${item.kind==='file'?` · ${Math.ceil((item.byte_size||0)/1024)} KB`:''}</span>${item.kind==='file'&&cloudUser?`<a class="button compact" href="#" data-open-file="${encodeURIComponent(item.id)}">열기</a>`:''}<button class="button compact" data-remove-resource="${index}">제거</button></div>`).join('')||'<p class="help">이번 안내에 추가한 자료가 없어요.</p>';
-  return `<a href="#project/${p.id}" class="back-link">${icon('back')} ${p.name} 전체 티켓</a>${heading('보낼 내용 확인',`${p.name} · ${t.title}`)}${sheetReviewReminder(p)}${noticeCardMarkup(d)}<div class="review-grid"><section class="panel form-panel"><h2>동료에게 보낼 메시지</h2><p class="caption muted" style="margin:7px 0 22px">정보 카드로 생성한 초안을 확인하고 다듬어주세요.</p><div class="draft-save-box" role="status" aria-live="polite"><span id="draft-save-state">${escapeHtml(cloudLabel(t))}</span><button class="button compact" id="draft-retry" data-action="retry-draft-save" ${cloudState[t.id]?.status==='error'?'':'hidden'}>다시 시도</button><span id="draft-conflict-actions" class="actions" ${cloudState[t.id]?.status==='conflict'?'':'hidden'}><button class="button compact" data-action="load-cloud-draft">서버 내용 불러오기</button><button class="button compact" data-action="overwrite-cloud-draft">내 변경 저장</button></span></div><div class="field"><label for="draft-tone">말투</label><select id="draft-tone"><option value="friendly" ${d.tone==='friendly'?'selected':''}>친근하고 밝게</option><option value="concise" ${d.tone==='concise'?'selected':''}>친근하고 간결하게</option><option value="action" ${d.tone==='action'?'selected':''}>신청 요청을 명확하게</option></select><p class="help">말투를 바꾸면 확인된 정보 카드로 Gemini가 본문을 다시 작성합니다. 직접 수정한 내용은 교체돼요.</p></div><div class="draft-area"><label class="preview-label" for="draft-body"><span>메시지 본문</span>${tag(d.generatedModel?'Gemini 초안':'직접 작성')}</label><textarea id="draft-body" maxlength="20000">${escapeHtml(d.body)}</textarea><p class="help">신청 링크와 날짜가 맞는지 보내기 전에 확인해주세요.</p></div><div class="draft-attachments"><h3>이번 안내에 포함할 자료</h3><p class="help">링크는 본문에 넣고, 파일은 로그인한 계정의 비공개 저장소에 저장해요. 실제 Slack 전송은 아직 연결되지 않았어요.</p><div id="draft-resources">${resources}</div><div class="resource-add"><input id="resource-label" type="text" maxlength="160" aria-label="링크 이름" placeholder="링크 이름"><input id="resource-url" type="url" maxlength="2000" aria-label="링크 주소" placeholder="https://…"><button class="button" data-action="add-resource-link">링크 추가</button></div><div class="field"><label for="resource-file">파일 첨부 (PDF·DOCX·TXT·MD·이미지, 4MB 이하)</label><input id="resource-file" type="file" accept=".pdf,.docx,.txt,.md,.png,.jpg,.jpeg" ${cloudUser?'':'disabled'}></div>${cloudUser?'':'<p class="help">파일을 저장하려면 상단의 Supabase 로그인을 완료해주세요.</p>'}</div></section><section class="panel form-panel"><h2 style="margin-bottom:22px">보내는 방법과 대상</h2><div id="recipient-settings">${recipientSettings(t)}</div></section></div><div class="approval-bar"><div><label class="confirm-row"><input type="checkbox" id="send-confirm" ${d.confirmed?'checked':''}><span id="confirmation-label">${confirmationLabel(d)}</span></label><p>체크하면 최종 본문과 대상을 확인하는 창이 열립니다.</p>${sendPreflightErrors.has(t.id)?`<p class="error-message" role="alert">${escapeHtml(sendPreflightErrors.get(t.id))}</p>`:''}</div><button class="button primary" id="send-button" data-action="simulate-send" ${canSend(t)?'':'disabled'}>${sendLabel(t)} ${icon('arrow')}</button></div>`;
+  return `<a href="#project/${p.id}" class="back-link">${icon('back')} ${p.name} 전체 티켓</a>${heading('보낼 내용 확인',`${p.name} · ${t.title}`)}${sheetReviewReminder(p)}${projectReviewMarkup(t)}${noticeCardMarkup(d,p)}<div class="review-grid"><section class="panel form-panel"><h2>동료에게 보낼 메시지</h2><p class="caption muted" style="margin:7px 0 22px">정보 카드로 생성한 초안을 확인하고 다듬어주세요.</p><div class="draft-save-box" role="status" aria-live="polite"><span id="draft-save-state">${escapeHtml(cloudLabel(t))}</span><button class="button compact" id="draft-retry" data-action="retry-draft-save" ${cloudState[t.id]?.status==='error'?'':'hidden'}>다시 시도</button><span id="draft-conflict-actions" class="actions" ${cloudState[t.id]?.status==='conflict'?'':'hidden'}><button class="button compact" data-action="load-cloud-draft">서버 내용 불러오기</button><button class="button compact" data-action="overwrite-cloud-draft">내 변경 저장</button></span></div><div class="field"><label for="draft-tone">말투</label><select id="draft-tone">${Object.entries(NOTICE_TONE_LABELS).map(([key,label])=>`<option value="${key}" ${d.tone===key?'selected':''}>${label}</option>`).join('')}</select><p class="help">말투를 바꿔도 현재 본문은 유지됩니다. 새 문구는 생성 버튼을 눌렀을 때만 요청합니다.</p></div><div class="draft-area"><label class="preview-label" for="draft-body"><span>메시지 본문</span>${tag(d.generatedModel?'Gemini 초안':'직접 작성')}</label><textarea id="draft-body" maxlength="20000">${escapeHtml(d.body)}</textarea><p class="help">신청 링크와 날짜가 맞는지 보내기 전에 확인해주세요.</p></div><div class="draft-attachments"><h3>이번 안내에 포함할 자료</h3><p class="help">링크는 본문에 넣고, 파일은 로그인한 계정의 비공개 저장소에 저장해요. 실제 Slack 전송은 아직 연결되지 않았어요.</p><div id="draft-resources">${resources}</div>${resourcePickerMarkup(t)}<div class="field"><label for="resource-scope">새 자료의 보관 범위</label><select id="resource-scope"><option value="notice">이번 안내에서만 사용</option><option value="project">프로젝트 공통 자료로 보관</option></select></div><div class="resource-add"><input id="resource-label" type="text" maxlength="160" aria-label="링크 이름" placeholder="링크 이름"><input id="resource-url" type="url" maxlength="2000" aria-label="링크 주소" placeholder="https://…"><button class="button" data-action="add-resource-link">링크 추가</button></div><div class="field"><label for="resource-file">파일 첨부 (PDF·DOCX·TXT·MD·이미지, 4MB 이하)</label><input id="resource-file" type="file" accept=".pdf,.docx,.txt,.md,.png,.jpg,.jpeg" ${cloudUser?'':'disabled'}></div>${cloudUser?'':'<p class="help">파일을 저장하려면 상단의 관리자 로그인을 완료해주세요.</p>'}</div></section><section class="panel form-panel"><h2 style="margin-bottom:22px">보내는 방법과 대상</h2><div id="recipient-settings">${recipientSettings(t)}</div></section></div><div class="approval-bar"><div><label class="confirm-row"><input type="checkbox" id="send-confirm" ${d.confirmed?'checked':''}><span id="confirmation-label">${confirmationLabel(d)}</span></label><p>체크하면 최종 본문과 대상을 확인하는 창이 열립니다.</p>${sendPreflightErrors.has(t.id)?`<p class="error-message" role="alert">${escapeHtml(sendPreflightErrors.get(t.id))}</p>`:''}</div><button class="button primary" id="send-button" data-action="simulate-send" ${canSend(t)?'':'disabled'}>${sendLabel(t)} ${icon('arrow')}</button></div>`;
 }
 const confirmationLabel = d => d.mode==='dm'?'보낼 내용과 DM을 받을 동료를 확인했어요.':'보낼 내용과 게시할 채널·공개 범위를 확인했어요.';
-const approvalSignature = t => {const d=getDraft(t),a=audience(getProject(t.project),d);return JSON.stringify({body:d.body,mode:d.mode,recipientIds:a.list.map(e=>e.id),channelIds:a.channels.map(c=>c.id),resources:d.resources||[]});};
-const canSend = t => {const d=getDraft(t),a=audience(getProject(t.project),d);return Boolean(!sendPreflightBusy&&ticketState(t)==='pending'&&cloudUser&&operatorSaveStatus==='saved'&&cloudState[t.id]?.status==='saved'&&!d._cloudDirty&&!d.briefStale&&d.confirmed&&d.confirmedSignature===approvalSignature(t)&&d.body.trim()&&(d.mode==='dm'?a.list.length:a.channels.length));};
+const approvalSignature = t => {const d=getDraft(t),a=audience(getProject(t.project),d);return JSON.stringify({body:d.body,noticeInformation:d.brief,projectSnapshot:d.projectSnapshot,mode:d.mode,recipientIds:a.list.map(e=>e.id),channelIds:a.channels.map(c=>c.id),resources:d.resources||[]});};
+const canSend = t => {const d=getDraft(t),a=audience(getProject(t.project),d);return Boolean(!needsDeadlineReview(t)&&!sendPreflightBusy&&ticketState(t)==='pending'&&cloudUser&&operatorSaveStatus==='saved'&&cloudState[t.id]?.status==='saved'&&!d._cloudDirty&&!d.briefStale&&!d.projectReviewRequired&&!compareDraftProject(d,getProject(t.project)).reviewRequired&&d.confirmed&&d.confirmedSignature===approvalSignature(t)&&d.body.trim()&&(d.mode==='dm'?a.list.length:a.channels.length));};
 const sendLabel = t => {const d=getDraft(t),a=audience(getProject(t.project),d);return d.mode==='dm'?`${a.list.length}명에게 DM 보내기 (예시)`:`${a.channels.length}개 채널에 게시 (예시)`;};
+function sendReadinessMarkup(t){
+  const d=getDraft(t),a=audience(getProject(t.project),d),items=[];
+  if(needsDeadlineReview(t))items.push('신청 마감이 지났습니다. 프로젝트 마감 정보를 다시 확인해주세요.');
+  if(!cloudUser)items.push('관리자 계정으로 로그인해주세요.');
+  else{
+    if(operatorSaveStatus!=='saved')items.push('운영 정보의 서버 저장을 완료해주세요.');
+    if(cloudState[t.id]?.status!=='saved'||d._cloudDirty)items.push('초안의 서버 저장을 완료해주세요.');
+  }
+  if(d.projectReviewRequired||compareDraftProject(d,getProject(t.project)).reviewRequired)items.push('변경된 프로젝트 정보를 확인해주세요.');
+  if(d.briefStale&&d.body.trim())items.push('바뀐 정보가 직접 작성한 본문에 반영됐는지 확인해주세요.');
+  if(!d.body.trim())items.push('Gemini 초안을 생성하거나 메시지 본문을 직접 작성해주세요.');
+  if(d.mode==='dm'&&!a.list.length||d.mode==='channel'&&!a.channels.length)items.push('받을 동료나 채널을 선택해주세요.');
+  if(!d.confirmed||d.confirmedSignature!==approvalSignature(t))items.push('최종 본문과 대상을 확인해주세요.');
+  return `<section id="send-readiness" class="send-readiness" aria-live="polite"><strong>${items.length?'보내기 전에 확인할 일':'보내기 예시 준비됨'}</strong>${items.length?`<ul>${items.map(item=>`<li>${escapeHtml(item)}</li>`).join('')}</ul>`:''}</section>`;
+}
+function refreshSendReadiness(t){const target=$('#send-readiness');if(target)target.outerHTML=sendReadinessMarkup(t);}
 function updateApproval(t) {
-  const d=getDraft(t);$('#send-confirm').checked=d.confirmed;$('#confirmation-label').textContent=confirmationLabel(d);$('#send-button').disabled=!canSend(t);$('#send-button').innerHTML=escapeHtml(sendLabel(t))+' '+icon('arrow');refreshNoticeCandidate(t);scheduleCloudSave(t);
+  const d=getDraft(t);$('#send-confirm').checked=d.confirmed;$('#confirmation-label').textContent=confirmationLabel(d);$('#send-button').disabled=!canSend(t);$('#send-button').innerHTML=escapeHtml(sendLabel(t))+' '+icon('arrow');refreshNoticeSummary(t);refreshNoticeUndo(t);refreshNoticeGenerationPreview(t);refreshDirectBodyReview(t);scheduleCloudSave(t);refreshSendReadiness(t);
 }
 function updateRecipients(t) {
   $('#recipient-settings').innerHTML=recipientSettings(t);const all=$('#all-teams');if(all)all.indeterminate=getDraft(t).teams.length>0&&getDraft(t).teams.length<TEAMS.length;filterRecipientRows();updateApproval(t);
@@ -834,22 +1064,44 @@ function render() {
   disposeDocumentImport?.();disposeDocumentImport=null;
   const r=route();renderNavigation(r);
   $('#content').innerHTML=r.view==='home'?home():r.view==='projects'?projectsPage():r.view==='project'?projectPage(r.id):r.view==='edit-project'?projectFormPage(r.id):r.view==='history'?historyPage():reviewPage(r.id);
+  if(r.view==='history')$('#history-project')?.closest('.field')?.insertAdjacentHTML('afterend',`<div class="field"><label for="history-source">기록 종류</label><select id="history-source"><option value="all" ${historySourceFilter==='all'?'selected':''}>전체</option><option value="manual" ${historySourceFilter==='manual'?'selected':''}>직접 추가</option><option value="simulated" ${historySourceFilter==='simulated'?'selected':''}>보내기 예시</option><option value="sample" ${historySourceFilter==='sample'?'selected':''}>예시 기록</option></select></div>`);
   if(r.view==='project')filterRoster();
   if(r.view==='edit-project'){
+    const project=r.id==='new'?null:getProject(r.id);
+    $('#project-voluntaryGoalRate')?.closest('.field')?.insertAdjacentHTML('afterend',`<div class="field"><label for="project-firstNoticeReviewAt">첫 안내 검토 시각 (선택)</label><input id="project-firstNoticeReviewAt" name="firstNoticeReviewAt" type="datetime-local" value="${escapeHtml(project?.firstNoticeReviewAt||'')}"><p class="help">비워 두면 등록 후 바로 첫 안내를 검토합니다. 입력한 시각에는 검토 티켓만 만들며 자동 발송하지 않습니다.</p></div>`);
+    const advanced=document.createElement('details');
+    advanced.className='advanced-settings field full';
+    advanced.innerHTML='<summary>안내 점검 설정 (선택)</summary><p class="help">기본 설정으로 시작해도 됩니다. 점검 시각과 자율 신청 목표는 필요할 때 바꿀 수 있어요.</p>';
+    const goalField=$('#project-voluntaryGoalRate')?.closest('.field');
+    if(goalField){
+      goalField.before(advanced);
+      const heading=[...$('#project-form .form-grid').children].find(node=>node.querySelector('h3')?.textContent==='안내 점검 정책');
+      const nodes=[goalField,$('#project-firstNoticeReviewAt')?.closest('.field'),heading,
+        ...['requiredCheckHour','finalHoursBefore','voluntaryD3Percent','voluntaryD1Percent','businessStartHour','businessEndHour'].map(key=>$(`#project-${key}`)?.closest('.field'))];
+      nodes.filter(Boolean).forEach(node=>advanced.append(node));
+    }
+    updateRegistrationSummary();
     refreshMemberPicker();
     disposeDocumentImport=mountDocumentImport($('#document-import'),{
       loggedIn:()=>Boolean(cloudUser),login:openCloudDialog,
       getValue:field=>$(`#project-${field}`)?.value||'',
       saved:getProject(r.id)?.sourceReviews||[],
-      apply:(rows,issues)=>{for(const row of rows){const input=$(`#project-${row.field}`);if(input){input.value=row.appliedValue;appliedFieldReviews[row.field]=row;}}appliedSourceIssues=issues;appliedDocumentName=[...new Set(rows.flatMap(row=>row.evidence.map(e=>e.sourceName)))].join(' · ');toast(`${rows.length}개 항목을 채웠어요. 확인 후 저장해주세요.`);},
+      apply:(rows,issues)=>{for(const row of rows){const input=$(`#project-${row.field}`);if(input){input.value=row.appliedValue;appliedFieldReviews[row.field]=row;}}appliedSourceIssues=issues;appliedDocumentName=[...new Set(rows.flatMap(row=>row.evidence.map(e=>e.sourceName)))].join(' · ');updateRegistrationSummary();toast(`${rows.length}개 항목을 채웠어요. 확인 후 저장해주세요.`);},
     });
+    projectFormBaseline=projectFormSignature();
   }
   if(r.view==='review'){
     const t=getTicket(r.id),d=getDraft(t),all=$('#all-teams');
+    if(needsDeadlineReview(t))$('.notice-card')?.insertAdjacentHTML('beforebegin','<section class="project-review" role="alert"><h2>신청 마감이 지났습니다</h2><p>프로젝트의 마감 시각을 다시 확인하기 전에는 이 신청 안내를 실행할 수 없습니다.</p></section>');
+    if(cloudUser&&!cloudState[t.id]){setCloudState(t,'pending');void refreshCloudDraft(t);}
     if(all)all.indeterminate=d.teams.length>0&&d.teams.length<TEAMS.length;
     const toneField=$('#draft-tone')?.closest('.field');
-    if(toneField){toneField.querySelector('.help').textContent='말투를 바꾸면 Gemini가 새 초안을 자동 생성합니다. 직접 고친 본문은 새 초안을 선택하기 전까지 유지돼요.';toneField.insertAdjacentHTML('afterend',`<div class="field"><label for="notice-purpose">공지 목적</label><select id="notice-purpose">${Object.entries(NOTICE_PURPOSES).map(([key,label])=>`<option value="${key}" ${d.purpose===key?'selected':''}>${label}</option>`).join('')}</select></div>`);}
-    $('#draft-body')?.closest('.draft-area')?.insertAdjacentHTML('afterend',noticeCandidateMarkup(t));
+    if(toneField){toneField.querySelector('.help').textContent='말투를 바꿔도 현재 본문은 유지됩니다. 생성 버튼을 누르면 새 문구가 아래 메시지 본문에 들어갑니다.';toneField.insertAdjacentHTML('afterend',`<div class="field"><label for="notice-purpose">공지 목적</label><select id="notice-purpose">${Object.entries(NOTICE_PURPOSES).map(([key,label])=>`<option value="${key}" ${d.purpose===key?'selected':''}>${label}</option>`).join('')}</select></div>`);}
+    toneField?.nextElementSibling?.insertAdjacentHTML('afterend',noticeGenerationPreviewMarkup(t));
+    $('#notice-generation-preview')?.insertAdjacentHTML('afterend',`<div class="notice-generate-action"><button class="button primary" data-action="generate-notice" ${cloudUser?'':'disabled'}>Gemini로 새 초안 문구 생성</button></div>`);
+    $('#draft-body')?.insertAdjacentHTML('afterend',directBodyReviewMarkup(d));
+    $('#draft-body')?.closest('.draft-area')?.insertAdjacentHTML('afterend',noticeUndoMarkup(t));
+    $('.approval-bar')?.insertAdjacentHTML('beforebegin',sendReadinessMarkup(t));
     filterRecipientRows();
   }
 }
@@ -875,6 +1127,7 @@ function renderHistoryDialog() {
     return `<div class="draft-resource"><span>${item.kind==='file'?'첨부 파일':'본문 링크'} · ${escapeHtml(item.label)}</span>${link}</div>`;
   }).join('');
   $('#history-url').closest('.field').insertAdjacentHTML('beforebegin',`<div class="history-resources"><h3>당시 포함한 자료</h3>${resources||'<p class="help">별도로 기록된 자료가 없어요.</p>'}</div>`);
+  if(r.revisions?.length)$('#history-url').closest('.field').insertAdjacentHTML('beforebegin',`<details class="history-revisions"><summary>이전 기록 ${r.revisions.length}개 보기</summary>${r.revisions.slice().reverse().map(item=>`<div class="history-revision"><strong>${escapeHtml(new Date(item.changedAt).toLocaleString('ko-KR'))} · ${escapeHtml(item.actor)}</strong><div class="message-original">${escapeHtml(item.body||'원문 없음')}</div><p>${escapeHtml(item.url||'Slack 링크 없음')}</p></div>`).join('')}</details>`);
 }
 function newHistory(projectId) {
   historyContext={id:null,edit:true,origin:document.activeElement};
@@ -966,13 +1219,17 @@ function saveCancelForm(event) {
   const reason=$('#cancel-reason').value.trim(),project=getProject(cancelContext.projectId),employeeId=cancelContext.employeeId;
   if(!reason){$('#cancel-reason').setCustomValidity('취소 사유를 입력해주세요.');$('#cancel-reason').reportValidity();return;}
   if(!project?.targetIds.includes(employeeId)||!status(project).appliedIds.includes(employeeId)){closeCancel();toast('신청 상태가 바뀌었어요. 다시 확인해주세요.');return;}
-  closeCancel();if(recordApplicationChange(project,employeeId,'cancelled',reason))toast('신청을 취소하고 사유를 기록했어요.');
+  closeCancel();if(recordApplicationChange(project,employeeId,'cancelled',reason))toast('이 브라우저에 신청 취소와 사유를 반영했어요. 상단에서 서버 저장 완료를 확인해주세요.');
 }
 function saveHistoryForm(event) {
   event.preventDefault();if(!requireOperator())return;const url=slackUrl($('#history-url').value);if(url===null){historyError('Slack 메시지 링크를 확인해주세요. HTTPS로 시작하는 Slack 메시지 주소를 넣어주세요.');return;}
   const record=records.find(r=>r.id===historyContext.id),body=historyContext.edit?$('#history-body').value.trim():record.body;
   if(!body&&!url){historyError('안내 원문 또는 Slack 메시지 링크를 넣어주세요.');return;}
-  record.body=body;record.url=url;record.kind=$('#history-kind').value;const saved=persist();closeHistory();render();if(saved)toast('안내 기록을 저장했어요.');
+  const kind=$('#history-kind').value;
+  if(record.body!==body||record.url!==url||recordKind(record)!==kind){
+    record.revisions=[...(record.revisions||[]),{body:record.body,url:record.url,kind:recordKind(record),changedAt:new Date().toISOString(),actor:cloudUser.email}];
+  }
+  record.body=body;record.url=url;record.kind=kind;const saved=persist();closeHistory();render();if(saved)toast('이 브라우저의 안내 기록을 바꿨어요. 상단에서 서버 저장 완료를 확인해주세요.');
 }
 function saveNewHistoryForm(event) {
   event.preventDefault();if(!requireOperator())return;const url=slackUrl($('#record-url').value),body=$('#record-body').value.trim();
@@ -981,7 +1238,7 @@ function saveNewHistoryForm(event) {
   if(records.length>=100){historyError('프로토타입에는 안내 기록을 100개까지 저장할 수 있어요.');return;}
   const record={id:crypto.randomUUID(),project:$('#record-project').value,kind:$('#record-kind').value,title:$('#record-title').value.trim(),date:$('#record-date').value,route:$('#record-route').value.trim(),body,url,source:'manual'};
   if(!record.title||!record.route||!validRecord(record)){historyError('제목, 날짜와 보낸 곳을 확인해주세요.');return;}
-  records.push(record);const saved=persist();closeHistory();render();if(saved)toast('새 안내 기록을 추가했어요.');
+  records.push(record);const saved=persist();closeHistory();render();if(saved)toast('이 브라우저에 안내 기록을 추가했어요. 상단에서 서버 저장 완료를 확인해주세요.');
 }
 async function simulateSend(t) {
   if(!canSend(t))return;if(records.length>=100){toast('프로토타입의 안내 기록 저장 한도에 도달했어요.');return;}
@@ -1011,12 +1268,16 @@ async function simulateSend(t) {
     if(!canSend(t)||approvalSignature(t)!==approvedSignature)throw new Error('확인 중 본문이나 대상이 바뀌었습니다. 다시 확인해주세요.');
     const a=audience(getProject(t.project),d),id=crypto.randomUUID();
     const route=d.mode==='dm'?`DM · 동료 ${a.list.length}명 · ${d.dmSelection==='people'?'개별 선택':d.teams.length===TEAMS.length?'전체 팀':d.teams.map(id=>TEAMS.find(t=>t.id===id).name).join('·')}`:`${a.channels.map(c=>c.name).join(' · ')} · 게시 ${a.channels.length}건`;
-    records.push({id,project:t.project,ticket:t.id,title:t.title,date:checkedAt(),route,body:d.body,url:'',source:'simulated',kind:recordKind({title:t.title,ticket:t.id}),recipientIds:d.mode==='dm'?a.list.map(e=>e.id):[],channelIds:d.mode==='channel'?a.channels.map(c=>c.id):[],resources:structuredClone(d.resources||[]),sourceCheckedAt,sourceRechecked:getProject(t.project).dataKind==='sheet'});
+    const date=checkedAt(),recipientIds=d.mode==='dm'?a.list.map(e=>e.id):[],channelIds=d.mode==='channel'?a.channels.map(c=>c.id):[];
+    records.push({...snapshotSimulatedNotice({draft:d,project:getProject(t.project),projectId:t.project,ticketId:t.id,
+      resources:normalizedSelectedResources(t),recipientIds,channelIds,sourceCheckedAt,date,id}),
+      title:t.title,route,url:'',kind:recordKind({title:t.title,ticket:t.id}),
+      sourceRechecked:getProject(t.project).dataKind==='sheet'});
     records.at(-1).purpose=d.purpose;
     records.at(-1).kind=d.purpose==='initial'?'initial':'reminder';
     clearTimeout(cloudTimers.get(t.id));delete cloudState[t.id];
     completed[t.id]=id;delete drafts[t.id];noticeStates.delete(t.id);const saved=persist();activeTab='tickets';location.hash=`project/${t.project}`;
-    if(saved)toast('안내 보내기를 완료했어요 (예시). 이 티켓의 원문을 기록했어요.');
+    if(saved)toast('보내기 예시 기록을 이 브라우저에 추가했어요. 상단에서 서버 저장 완료를 확인해주세요. 실제 Slack 발송은 없어요.');
   }catch(error){
     d.confirmed=false;d.confirmedSignature='';d.confirmedSourceSnapshot='';d.confirmedSpreadsheetId='';
     sendPreflightErrors.set(t.id,error.message||'최신 신청 현황을 확인하지 못했습니다. 다시 확인해주세요.');
@@ -1041,7 +1302,7 @@ document.addEventListener('click',event=>{
     const p=getProject(button.dataset.project),employeeId=Number(button.dataset.employee),value=button.dataset.application;
     if(!p?.targetIds.includes(employeeId) || !['applied','confirmed','cancelled'].includes(value))return;
     if(value==='cancelled'){openCancel(p,employeeId);return;}
-    if(recordApplicationChange(p,employeeId,value==='applied'&&p.confirmationMode==='immediate'?'confirmed':value))toast('신청 상태를 반영했어요.');return;
+    if(recordApplicationChange(p,employeeId,value==='applied'&&p.confirmationMode==='immediate'?'confirmed':value))toast('이 브라우저에 신청 상태를 반영했어요. 상단에서 서버 저장 완료를 확인해주세요.');return;
   }
   if(button.dataset.record){openHistory(button.dataset.record);return;}
   if(button.dataset.ticketDecision){openTicketDecision(button.dataset.ticketId,button.dataset.ticketDecision);return;}
@@ -1050,6 +1311,15 @@ document.addEventListener('click',event=>{
   if(button.dataset.date){calendar.selected=button.dataset.date;refreshCalendar();$(`[data-date="${calendar.selected}"]`)?.focus();return;}
   if(button.dataset.month){const d=new Date(Date.UTC(calendar.year,calendar.month+Number(button.dataset.month),1));if(d.getUTCFullYear()<2000||d.getUTCFullYear()>2100)return;calendar.year=d.getUTCFullYear();calendar.month=d.getUTCMonth();calendar.selected=dayKey(d);refreshCalendar();return;}
   const r=route(),t=r.view==='review'?getTicket(r.id):null;
+  if(button.dataset.selectProjectResource&&t){
+    const item=latestProjectResources(getProject(t.project).noticeResources||[],t.project)
+      .find(resource=>resource.id===button.dataset.selectProjectResource);
+    const d=getDraft(t);
+    if(!item||d.resources.length>=20){toast('프로젝트 자료를 선택할 수 없어요.');return;}
+    d.resources.push(item);
+    if(item.kind==='link'&&!d.body.includes(item.url))d.body=`${d.body.trimEnd()}\n\n${item.label}: ${item.url}`;
+    d.confirmed=false;render();updateApproval(t);return;
+  }
   if(button.dataset.briefConfirm&&t){
     const key=button.dataset.briefConfirm,d=getDraft(t),item=d.brief[key];
     if(!item?.value.trim())return;
@@ -1077,14 +1347,15 @@ document.addEventListener('click',event=>{
   if(button.dataset.dmSelection&&t){const d=getDraft(t);d.dmSelection=button.dataset.dmSelection;d.confirmed=false;recipientPage=0;updateRecipients(t);return;}
   if(button.dataset.removeChannel&&t){const d=getDraft(t);d.channels=d.channels.filter(id=>id!==button.dataset.removeChannel);d.confirmed=false;updateRecipients(t);return;}
   if(button.dataset.recipientsPage&&t){recipientPage+=Number(button.dataset.recipientsPage);$('#recipient-list').innerHTML=recipientTable(audience(getProject(t.project),getDraft(t)).list,getProject(t.project));return;}
-  if(button.dataset.action==='reset-sample'&&resetArmed)noticeStates.clear();
   switch(button.dataset.action){
     case 'close-cloud':closeCloudDialog();break;
     case 'retry-operator-state':operatorSaveStatus='pending';operatorConflict=null;void saveOperatorState();closeCloudDialog();break;
-    case 'load-operator-state':if(operatorConflict){applyOperatorState(operatorConflict);closeCloudDialog();toast('서버 운영 정보를 불러왔어요.');}break;
+    case 'load-operator-state':if(operatorConflict){applyOperatorState(operatorConflict);closeCloudDialog();if(route().view==='edit-project')render();toast('서버 운영 정보를 불러왔어요.');}break;
     case 'overwrite-operator-state':if(operatorConflict){operatorVersion=operatorConflict.version;operatorConflict=null;operatorSaveStatus='pending';operatorDirty=true;scheduleOperatorSave();closeCloudDialog();}break;
     case 'close-ticket-dialog':closeTicketDecision();break;
-    case 'cloud-signout':logoutCloud();break;
+    case 'cloud-signout':void logoutCloud();break;
+    case 'retry-logout':void logoutCloud();break;
+    case 'discard-logout':if(window.confirm('서버에 저장되지 않은 운영 정보·초안·편집 중인 양식을 이 브라우저에서 버리고 로그아웃할까요?'))void logoutCloud({discard:true});break;
     case 'retry-draft-save':if(t)saveCloudDraft(t);break;
     case 'load-cloud-draft':if(t){
       const remote=cloudState[t.id]?.remote;
@@ -1103,14 +1374,21 @@ document.addEventListener('click',event=>{
       const d=getDraft(t);
       if(!label){toast('링크 이름을 입력해주세요.');break;}
       if(d.resources.length>=20){toast('자료는 20개까지 추가할 수 있어요.');break;}
-      d.resources.push({kind:'link',id:crypto.randomUUID(),label,url:url.href});
+      const scope=$('#resource-scope')?.value||'notice';
+      const entry=makeNoticeResource({kind:'link',scope,label,url:url.href},{projectId:t.project,ticketId:t.id});
+      d.resources.push(entry);
+      if(scope==='project'){const p=getProject(t.project);p.noticeResources=[...(p.noticeResources||[]),entry];persist();}
       d.body=`${d.body.trimEnd()}\n\n${label}: ${url.href}`;
       d.confirmed=false;render();updateApproval(t);toast('링크를 본문과 자료 목록에 추가했어요.');
     }break;
     case 'select-visible-members':document.querySelectorAll('[data-member-row]:not([hidden]) [data-target-member]').forEach(input=>input.checked=true);refreshMemberPicker();break;
     case 'clear-visible-members':document.querySelectorAll('[data-member-row]:not([hidden]) [data-target-member]').forEach(input=>input.checked=false);refreshMemberPicker();break;
     case 'sync-sheet':void syncSheetSource();break;
-    case 'reset-sample':if(!requireOperator())break;if(!resetArmed){resetArmed=true;render();break;}resetArmed=false;EMPLOYEES=structuredClone(INITIAL_EMPLOYEES);sheetSync=null;sheetSyncError='';PROJECTS=structuredClone(INITIAL_PROJECTS);applications=structuredClone(INITIAL_APPLICATIONS);applicationEvents=[];records=structuredClone(INITIAL_RECORDS);TICKETS=structuredClone(INITIAL_TICKETS);completed={};drafts={};calendar={year:Number(TODAY_KST.slice(0,4)),month:Number(TODAY_KST.slice(5,7))-1,selected:TODAY_KST,view:'calendar'};persist();render();toast('예시 데이터로 초기화했어요.');break;
+    case 'reset-sample':
+      if(cloudUser){toast('서버 연결 중에는 예시 초기화를 사용할 수 없습니다.');break;}
+      if(!resetArmed){resetArmed=true;render();break;}
+      if(!window.confirm('이 브라우저의 프로젝트·신청 상태·안내 기록·초안을 예시 데이터로 바꿀까요? 서버 자료는 변경되지 않습니다.'))break;
+      resetArmed=false;noticeStates.clear();EMPLOYEES=structuredClone(INITIAL_EMPLOYEES);sheetSync=null;sheetSyncError='';PROJECTS=structuredClone(INITIAL_PROJECTS);applications=structuredClone(INITIAL_APPLICATIONS);applicationEvents=[];records=structuredClone(INITIAL_RECORDS);TICKETS=structuredClone(INITIAL_TICKETS);completed={};drafts={};calendar={year:Number(TODAY_KST.slice(0,4)),month:Number(TODAY_KST.slice(5,7))-1,selected:TODAY_KST,view:'calendar'};persist({remote:false});render();toast('이 브라우저의 예시 데이터를 초기화했어요.');break;
     case 'calendar-today':calendar={year:Number(TODAY_KST.slice(0,4)),month:Number(TODAY_KST.slice(5,7))-1,selected:TODAY_KST,view:'calendar'};refreshCalendar();break;
     case 'new-record':newHistory(button.dataset.project);break;
     case 'close-dialog':closeHistory();break;
@@ -1123,27 +1401,49 @@ document.addEventListener('click',event=>{
       const pendingUrl=$('#history-url').value,pendingKind=$('#history-kind').value;historyContext.edit=!historyContext.edit;renderHistoryDialog();$('#history-url').value=pendingUrl;$('#history-kind').value=pendingKind;break;
     }
     case 'simulate-send':if(t)simulateSend(t);break;
-    case 'generate-notice':if(t)void generateNoticeDraft(t);break;
-    case 'accept-notice':if(t){
-      const d=getDraft(t),candidate=noticeStates.get(t.id)?.candidate;
-      if(!acceptNoticeCandidate(d,candidate,noticeContext(t).signature)){toast('작성 기준이 변경됐어요. 초안을 다시 생성해주세요.');break;}
-      noticeStates.delete(t.id);$('#draft-body').value=d.body;updateApproval(t);toast('새 초안을 적용했어요. 내용을 확인한 뒤 승인해주세요.');
+    case 'accept-project-review':if(t){
+      const d=getDraft(t),project=getProject(t.project),comparison=compareDraftProject(d,project);
+      const previous=makeNoticeBrief(d.projectSnapshot||{}),latest=makeNoticeBrief(project);
+      const brief=comparison.legacy?latest:structuredClone(d.brief);
+      if(!comparison.legacy)for(const key of Object.keys(latest)){
+        if(brief[key]?.source!=='담당자 수정'&&brief[key]?.source!=='담당자 확인'&&brief[key]?.value===previous[key]?.value)brief[key]=latest[key];
+      }
+      Object.assign(d,acceptProjectReview(d,project,brief));
+      scheduleCloudSave(t);render();toast('최신 운영 정보를 반영했어요. 본문을 다시 확인해주세요.');
     }break;
-    case 'discard-notice':if(t){noticeStates.delete(t.id);refreshNoticeCandidate(t);}break;
+    case 'confirm-direct-body':if(t){
+      const d=getDraft(t);
+      if(d.projectReviewRequired||compareDraftProject(d,getProject(t.project)).reviewRequired){toast('바뀐 프로젝트 정보를 먼저 확인해주세요.');break;}
+      if(!d.body.trim()){toast('직접 작성한 본문이 없습니다. 위에서 초안을 생성하거나 본문을 작성해주세요.');break;}
+      d.briefStale=false;d.confirmed=false;updateApproval(t);render();toast('직접 작성한 본문을 확인했습니다. 최종 대상도 확인해주세요.');
+    }break;
+    case 'generate-notice':if(t)void generateNoticeDraft(t);break;
+    case 'edit-required-brief':if(t)openRequiredBriefField(t,button.dataset.field);break;
+    case 'undo-generated-notice':if(t){
+      const d=getDraft(t),state=noticeStates.get(t.id);
+      if(!state||d.body!==state.generatedBody){toast('본문이 바뀌어 이전 문구로 되돌릴 수 없어요.');break;}
+      d.body=state.previous.body;d.generatedAt=state.previous.generatedAt;d.generatedModel=state.previous.generatedModel;
+      d.briefStale=state.previous.briefStale||state.signature!==noticeContext(t).signature;
+      d.confirmed=false;d.confirmedSignature='';noticeStates.delete(t.id);
+      $('#draft-body').value=d.body;$('.draft-area .tag').textContent=d.generatedModel?'Gemini 초안':'직접 작성';
+      updateApproval(t);toast('생성 전 본문으로 되돌렸어요.');
+    }break;
   }
 });
 document.addEventListener('change',async event=>{
   const r=route(),el=event.target;
   if(el.id==='history-project'){historyFilter=el.value;render();$('#history-project').focus();return;}
+  if(el.id==='history-source'){historySourceFilter=el.value;render();$('#history-source').focus();return;}
   if(el.id==='roster-filter'){rosterFilter=el.value;filterRoster();return;}
   if(el.id==='preview-ack'){$('[data-action="confirm-preview"]').disabled=!el.checked;return;}
   if(r.view==='edit-project'){
     if(el.id==='member-team'||el.matches('[data-target-member], [data-required-member]'))refreshMemberPicker();
+    updateRegistrationSummary();
     return;
   }
   if(r.view!=='review')return;const t=getTicket(r.id),d=getDraft(t);
   if(el.id==='resource-file'){const file=el.files?.[0];if(!file)return;if(d.resources.length>=20){toast('자료는 20개까지 추가할 수 있어요.');return;}await uploadNoticeFile(t,file);return;}
-  if(el.id==='draft-tone'||el.id==='notice-purpose'){d[el.id==='draft-tone'?'tone':'purpose']=el.value;d.confirmed=false;updateApproval(t);void generateNoticeDraft(t);return;}
+  if(el.id==='draft-tone'||el.id==='notice-purpose'){d[el.id==='draft-tone'?'tone':'purpose']=el.value;d.confirmed=false;updateApproval(t);return;}
   if(el.dataset.briefInclude){d.brief[el.dataset.briefInclude].included=el.checked;d.briefStale=true;d.confirmed=false;updateApproval(t);return;}
   if(el.id==='audience-scope')d.scope=el.value;
   else if(el.id==='all-teams')d.teams=el.checked?TEAMS.map(t=>t.id):[];
@@ -1153,11 +1453,12 @@ document.addEventListener('change',async event=>{
   d.confirmed=false;recipientPage=0;updateRecipients(t);
 });
 document.addEventListener('input',event=>{
+  if(event.target.closest('#project-form'))updateRegistrationSummary();
   if(event.target.id==='roster-search'){rosterSearch=event.target.value;filterRoster();return;}
   if(event.target.id==='member-search'){refreshMemberPicker();return;}
   if(event.target.id==='recipient-search'){recipientSearch=event.target.value;filterRecipientRows();return;}
-  if(event.target.id==='draft-body'){const r=route();if(r.view!=='review')return;const t=getTicket(r.id),d=getDraft(t);d.body=event.target.value;d.confirmed=false;updateApproval(t);}
-  if(event.target.dataset.briefField){const r=route();if(r.view!=='review')return;const t=getTicket(r.id),d=getDraft(t),key=event.target.dataset.briefField,item=d.brief[key];item.value=event.target.value;item.source='담당자 수정';item.status=item.value.trim()?'confirmed':'missing';item.evidence=[];const field=event.target.closest('.notice-card-field'),badge=field.querySelector(`[data-brief-status="${key}"]`);badge.textContent=item.status==='confirmed'?'확인됨':'내용 없음';badge.className=`tag ${item.status==='confirmed'?'green':'orange'}`;field.querySelector(`[data-brief-source="${key}"]`).textContent=item.source;field.querySelector('.brief-evidence')?.remove();field.querySelector('[data-brief-confirm]')?.remove();d.briefStale=true;d.confirmed=false;updateApproval(t);}
+  if(event.target.id==='draft-body'){const r=route();if(r.view!=='review')return;const t=getTicket(r.id),d=getDraft(t);d.body=event.target.value;d.confirmed=false;noticeStates.delete(t.id);updateApproval(t);}
+  if(event.target.dataset.briefField){const r=route();if(r.view!=='review')return;const t=getTicket(r.id),d=getDraft(t),key=event.target.dataset.briefField,item=d.brief[key];item.value=event.target.value;item.source='담당자 수정';item.status=item.value.trim()?'needs_review':'missing';if(['what','action','deadline'].includes(key)&&item.value.trim()){item.included=true;event.target.closest('.notice-card-field').querySelector('[data-brief-include]').checked=true;}item.evidence=[];const field=event.target.closest('.notice-card-field'),badge=field.querySelector(`[data-brief-status="${key}"]`);badge.textContent=item.status==='needs_review'?'확인 필요':'내용 없음';badge.className='tag orange';field.querySelector(`[data-brief-source="${key}"]`).textContent=item.source;field.querySelector('.brief-evidence')?.remove();const confirm=field.querySelector('[data-brief-confirm]');if(item.value.trim()){if(!confirm)badge.insertAdjacentHTML('afterend',`<button type="button" class="button compact" data-brief-confirm="${key}">내용 확인 완료</button>`);}else confirm?.remove();d.briefStale=true;d.confirmed=false;updateApproval(t);}
 });
 document.addEventListener('submit',event=>{if(event.target.id==='cloud-login-form')loginCloud(event);if(event.target.id==='history-form')saveHistoryForm(event);if(event.target.id==='new-history-form')saveNewHistoryForm(event);if(event.target.id==='project-form')saveProjectForm(event);if(event.target.id==='cancel-form')saveCancelForm(event);if(event.target.id==='ticket-decision-form')saveTicketDecision(event);});
 $('#history-dialog').addEventListener('cancel',event=>{event.preventDefault();closeHistory();});
@@ -1171,7 +1472,15 @@ document.addEventListener('keydown',event=>{
   event.preventDefault();activeTab=event.key==='Home'?'tickets':event.key==='End'?'history':activeTab==='tickets'?'history':'tickets';render();$(`#${activeTab==='tickets'?'tickets-tab':'sent-tab'}`).focus();
 });
 let previousRoute=route();
+let previousHash=location.hash;
+let restoringProjectHash=false;
 window.addEventListener('hashchange',()=>{
+  if(restoringProjectHash){restoringProjectHash=false;return;}
+  if(previousRoute.view==='edit-project'&&!projectFormAllowNavigation&&projectFormDirty()&&!window.confirm('프로젝트 변경 사항을 아직 저장하지 않았습니다. 입력한 내용을 버리고 이동할까요?')){
+    restoringProjectHash=true;location.hash=previousHash;return;
+  }
+  projectFormAllowNavigation=false;
+  previousHash=location.hash;
   if(previousRoute.view==='review'){
     const previousDraft=drafts[previousRoute.id];
     if(previousDraft){previousDraft.confirmed=false;previousDraft.confirmedSignature='';}
@@ -1179,6 +1488,18 @@ window.addEventListener('hashchange',()=>{
   previousRoute=route();
   if($('#history-dialog').open)closeHistory();if($('#cancel-dialog').open)closeCancel();if($('#send-preview-dialog').open)closeSendPreview();activeTab='tickets';rosterSearch='';rosterFilter='all';recipientPage=0;recipientSearch='';resetArmed=false;projectFormError='';appliedDocumentName='';appliedFieldReviews={};appliedSourceIssues=null;
   render();window.scrollTo({top:0,behavior:'instant'});$('#content').focus({preventScroll:true});
+  if(operatorDeferredState&&route().view!=='edit-project'){
+    if(operatorDirty)scheduleOperatorSave();else void refreshOperatorState();
+  }
+});
+window.addEventListener('beforeunload',event=>{if(projectFormDirty()){event.preventDefault();event.returnValue='';}});
+window.addEventListener('office-benefits-auth-updated',event=>{
+  if(cloudInitializing)return;
+  if(event.detail?.signedIn){if(!cloudUser)void initializeCloud();return;}
+  cloudUser=null;operatorSaveStatus='local';clearTimeout(operatorSaveTimer);
+  for(const timer of cloudTimers.values())clearTimeout(timer);
+  cloudTimers.clear();
+  renderCloudButton();if(route().view!=='edit-project')render();
 });
 window.addEventListener('focus',()=>{void refreshOperatorState().then(()=>refreshAutomatedSheetState()).catch(()=>{});const r=route();if(r.view==='review')refreshCloudDraft(getTicket(r.id));});
 setInterval(()=>{if(cloudUser&&!operatorDirty&&route().view!=='edit-project')void refreshAutomatedSheetState().catch(error=>{sheetSyncError=error.message;});},5*60*1000);

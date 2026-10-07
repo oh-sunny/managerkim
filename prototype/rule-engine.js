@@ -64,6 +64,45 @@ function parseStart(value) {
   return parseProjectTime(value, '신청 시작');
 }
 
+/**
+ * A first notice is a review task, not a claim about applicants or an automatic send.
+ * `createdAt` keeps the default immediate checkpoint stable across repeated evaluations.
+ * Older projects without either timestamp need an operator review instead of a new key
+ * on every scheduler run.
+ */
+export function evaluateFirstNoticeTicket({project, now, existingTickets = []}) {
+  if (!project || typeof project.id !== 'string' || !project.id.trim()) {
+    throw new TypeError('프로젝트 ID를 확인해주세요.');
+  }
+  const nowAt = parseInstant(now, '현재');
+  const prior = existingTickets.filter(ticket => ticket.key?.startsWith(`${project.id}:initial:`));
+  const activePrior = prior.filter(ticket => ['pending', 'scheduled', 'deferred'].includes(ticket.state));
+  if (['cancelled', 'closed'].includes(project.lifecycle)) {
+    return {status: 'ready', blockedReasons: [], tickets: [], retiredKeys: activePrior.map(ticket => ticket.key)};
+  }
+  const reviewTime = project.firstNoticeReviewAt || project.createdAt;
+  if (!reviewTime) {
+    return {status: 'blocked', blockedReasons: ['registration-time-missing'], tickets: [], retiredKeys: []};
+  }
+  const due = parseProjectTime(reviewTime, '첫 안내 검토');
+  const dueAt = due.toISOString();
+  const key = `${project.id}:initial:${dueAt}`;
+  const previous = prior.find(ticket => ticket.key === key);
+  const retiredKeys = activePrior.filter(ticket => ticket.key !== key).map(ticket => ticket.key);
+  if (['done', 'dismissed'].includes(previous?.state)) {
+    return {status: 'ready', blockedReasons: [], tickets: [], retiredKeys};
+  }
+  const state = previous?.state === 'deferred' && previous.reviewAt && Date.parse(previous.reviewAt) > nowAt.getTime()
+    ? 'deferred' : due > nowAt ? 'scheduled' : 'pending';
+  const ticket = {
+    key, id: key, project: project.id, kind: 'initial', dueAt,
+    date: dateKey(kstParts(due)), originalTimes: [dueAt], triggers: ['first-notice'],
+    state, title: '첫 안내 준비', reason: '첫 안내 내용과 대상을 검토할 시점입니다.',
+    recipientIds: [], sourceCheckedAt: null, metrics: null,
+  };
+  return {status: 'ready', blockedReasons: [], tickets: [ticket], retiredKeys};
+}
+
 function checkedCalendar(calendar) {
   if (calendar?.status !== 'success' || !Array.isArray(calendar.holidays)) return null;
   if (calendar.holidays.some(day => !/^\d{4}-\d{2}-\d{2}$/.test(day) || dateKey(kstParts(atKst(...day.split('-').map(Number)))) !== day)) {
@@ -148,6 +187,44 @@ function checkpoints(project, rules, calendar) {
     }
   }
   return {deadline, checkpoints: [...grouped.values()].sort((a, b) => a.dueAt.localeCompare(b.dueAt) || a.key.localeCompare(b.key)), needsReview};
+}
+
+/** Evaluate reminder times when an application source has not been connected yet. */
+export function evaluateReminderCheckpoints({project, calendar, now, existingTickets = [], policy = {}}) {
+  if (!project || typeof project.id !== 'string' || !project.id.trim()) {
+    throw new TypeError('프로젝트 ID를 확인해주세요.');
+  }
+  const nowAt = parseInstant(now, '현재');
+  const previous = existingTickets.filter(ticket => ticket.key?.startsWith(`${project.id}:required:`)
+    || ticket.key?.startsWith(`${project.id}:voluntary:`));
+  const active = previous.filter(ticket => ['pending', 'scheduled', 'deferred'].includes(ticket.state));
+  if (['cancelled', 'closed'].includes(project.lifecycle)) {
+    return {status: 'ready', blockedReasons: [], tickets: [], needsReview: [], retiredKeys: active.map(ticket => ticket.key)};
+  }
+  if (!checkedCalendar(calendar)) {
+    return {status: 'blocked', blockedReasons: ['calendar-unverified'], tickets: [], needsReview: [], retiredKeys: []};
+  }
+  // Freshness applies to source-backed proposals, not the checkpoint schedule itself.
+  const rules = policyFor(project, {...policy, maxDataAgeMinutes: 1});
+  const {deadline, checkpoints: schedule, needsReview} = checkpoints(project, rules, calendar);
+  const byKey = new Map(previous.map(ticket => [ticket.key, ticket]));
+  const tickets = [];
+  for (const point of schedule) {
+    if (Date.parse(point.dueAt) >= deadline.getTime() || nowAt >= deadline) continue;
+    if (point.kind === 'voluntary' && project.voluntaryGoalRate == null) continue;
+    if (point.kind === 'required' && Array.isArray(project.requiredIds) && project.requiredIds.length === 0) continue;
+    const prior = byKey.get(point.key);
+    if (['done', 'dismissed'].includes(prior?.state)) continue;
+    const due = Date.parse(point.dueAt) <= nowAt.getTime();
+    const state = prior?.state === 'deferred' && prior.reviewAt && Date.parse(prior.reviewAt) > nowAt.getTime()
+      ? 'deferred' : due ? 'pending' : 'scheduled';
+    tickets.push({...point, state,
+      title: point.kind === 'required' ? '필수 대상 신청 현황 확인' : '자율 신청 목표 확인',
+      reason: '신청 현황 확인 필요', recipientIds: [], sourceCheckedAt: null, metrics: null});
+  }
+  const keys = new Set(tickets.map(ticket => ticket.key));
+  return {status: 'ready', blockedReasons: [], tickets, needsReview,
+    retiredKeys: active.filter(ticket => !keys.has(ticket.key)).map(ticket => ticket.key)};
 }
 
 /**

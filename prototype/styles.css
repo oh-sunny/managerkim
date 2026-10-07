@@ -102,3 +102,29 @@ h1{letter-spacing:-.7px}.project-hero h1{font-size:28px}.back-link{font-size:13p
 @media(max-width:650px){.dialog-form-grid{grid-template-columns:1fr;gap:0}.history-toolbar{align-items:flex-start;flex-direction:column;gap:12px}.history-toolbar .field{width:100%}.history-toolbar select{width:100%}.dialog-footer{gap:12px}.dialog-footer>.actions{width:100%;justify-content:flex-end}.dialog-footer>.help{font-size:12px}.preview-target-list{max-height:150px}}
 .sheet-source-panel{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:17px 23px;margin-bottom:24px;background:#f7faf8}.sheet-source-panel h2{font-size:15px;margin-bottom:5px}.sheet-source-panel p{margin:4px 0;line-height:1.6}.sheet-source-panel a{display:inline-flex;align-items:center;gap:4px;margin-top:6px;font-size:13px;color:#a33e13;text-decoration:underline;text-underline-offset:3px}.sheet-source-panel a svg{width:13px;height:13px}.sheet-source-panel .button{flex:none}@media(max-width:650px){.sheet-source-panel{padding:16px;align-items:flex-start;flex-direction:column}.sheet-source-panel .button{width:100%}}
 .recipient-quick-actions{display:flex;flex-wrap:wrap;gap:7px;margin:-8px 0 17px}.recipient-quick-actions .button{flex:1 1 170px;justify-content:space-between;text-align:left}.recipient-quick-actions span{margin-left:8px;color:var(--orange);font-weight:700}.recipient-quick-actions button:disabled span{color:var(--muted)}.individual-group[hidden]{display:none}.individual-group h3{position:sticky;top:0;z-index:1;margin:0;padding:7px 11px;background:#f2f5f1;border-top:1px solid var(--border);font-size:12px;color:#4f6155}.individual-group:first-child h3{border-top:0}.preview-target-breakdown{font-size:13px;color:#526259;margin:0 0 10px}.preview-recipient-groups{max-height:260px;overflow:auto;border:1px solid var(--border);border-radius:8px}.preview-recipient-group h4{position:sticky;top:0;margin:0;padding:8px 12px;background:#f2f5f1;border-top:1px solid var(--border);font-size:13px}.preview-recipient-group:first-child h4{border-top:0}.preview-recipient-group ul{list-style:none;margin:0;padding:0}.preview-recipient-group li{display:flex;justify-content:space-between;gap:12px;padding:8px 12px;border-top:1px solid #eef1ec;font-size:13px}.preview-recipient-group li span{color:#627168;text-align:right}.preview-source-check{margin:15px 0 0;padding:11px 13px;background:#f7faf8;border:1px solid #e5ece5;border-radius:7px;font-size:13px;line-height:1.7;color:#526259}.preview-source-check strong{color:#344238}@media(max-width:650px){.preview-recipient-group li{display:block}.preview-recipient-group li span{display:block;text-align:left;margin-top:2px}}
+
+/* SPEC 003 registration and notice review. */
+.registration-summary,.notice-generation-preview,.project-review{margin:20px 0;padding:18px 22px;background:#f7faf8;border:1px solid #dce6dd;border-radius:10px}
+.registration-summary h2,.notice-generation-preview h3{font-size:16px;margin-bottom:8px}
+.registration-summary-list,.notice-summary-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 20px;margin:14px 0}
+.registration-summary-list>div,.notice-summary-list>div{min-width:0;padding:9px 0;border-top:1px solid #e4ebe5}
+.registration-summary-list dt,.notice-summary-list dt{font-weight:650;font-size:13px}
+.registration-summary-list dd,.notice-summary-list dd{margin:3px 0 0;overflow-wrap:anywhere;font-size:14px}
+.registration-summary-list small,.notice-summary-list small{display:block;color:#627168;font-size:12px}
+.notice-card-editor{margin:14px 0}.notice-card-editor>summary{font-weight:650}.notice-card-editor .notice-card-grid{margin-top:12px}
+.notice-generation-preview ul{margin:10px 0 0;padding-left:20px}.notice-generation-preview li{margin:4px 0;overflow-wrap:anywhere}
+.notice-generate-action{margin:12px 0 20px}.project-resource-picker{margin:16px 0;padding:12px;border:1px solid #e4ebe5;border-radius:8px}.project-resource-picker h4{margin:0 0 8px;font-size:14px}
+@media(max-width:650px){.registration-summary,.notice-generation-preview,.project-review{padding:15px}.registration-summary-list,.notice-summary-list{grid-template-columns:1fr}}
+.advanced-settings{border:1px solid var(--border);border-radius:9px;padding:15px 18px;background:#fafbf9}
+.advanced-settings>summary{cursor:pointer;font-weight:650}
+.advanced-settings[open]>.field{margin-top:16px}
+.logout-blockers{margin-top:18px;padding:12px;border:1px solid #ecc9b8;border-radius:8px;background:#fff8f3}
+.logout-blockers ul,.send-readiness ul{margin:8px 0 12px;padding-left:21px;line-height:1.7}
+.send-readiness{padding:14px 18px;margin:18px 0 0;border:1px solid var(--border);border-radius:9px;background:#f8faf7;font-size:13px}
+.send-readiness strong{font-size:14px}
+.send-readiness ul{margin-bottom:0}
+.expired-ticket{border-color:#e8c5ad;background:#fffaf6}
+.history-revisions{margin:16px 0;border:1px solid var(--border);border-radius:8px;padding:12px}
+.history-revisions>summary{cursor:pointer;font-weight:600}
+.history-revision{border-top:1px solid var(--border);padding-top:10px;margin-top:10px;font-size:12px}
+.history-revision .message-original{font-size:12px;padding:10px}

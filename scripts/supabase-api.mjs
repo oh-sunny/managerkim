@@ -39,7 +39,7 @@ async function bytes(req,max) {
 const validDraft = data => data && typeof data==='object' && !Array.isArray(data) &&
   typeof data.body==='string' && data.body.length<=20000 &&
   (data.purpose===undefined || ['initial','reminder','deadline'].includes(data.purpose)) &&
-  ['friendly','concise','action'].includes(data.tone) && ['dm','channel'].includes(data.mode) &&
+  ['friendly','concise','formal','action'].includes(data.tone) && ['dm','channel'].includes(data.mode) &&
   ['pending','project','company'].includes(data.scope) && ['team','people'].includes(data.dmSelection) &&
   Array.isArray(data.teams) && data.teams.length<=20 && data.teams.every(item=>typeof item==='string') &&
   Array.isArray(data.selectedIds) && data.selectedIds.length<=160 && data.selectedIds.every(Number.isInteger) &&
