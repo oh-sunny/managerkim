@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {createNoticeGenerator,validateNoticeInput,BRIEF_FIELDS} from '../scripts/notice-generation.mjs';
+import {prepareNoticeGeneration,NOTICE_TONE_LABELS} from '../prototype/notice-generation-input.js';
 import {createPublicHolidayCalendar} from '../scripts/public-holidays.mjs';
 import {generationSignature,acceptNoticeCandidate,makeNoticeBrief} from '../prototype/notice-draft.js';
 
@@ -11,6 +12,28 @@ card.action={value:'검진기관을 선택해 신청',included:true,status:'conf
 card.deadline={value:'10월 16일 18:00',included:true,status:'confirmed',source:'프로젝트 정보'};
 card.links={value:'https://example.org/apply',included:true,status:'confirmed',source:'담당자 입력'};
 const input={projectTitle:'연례 건강검진',tone:'friendly',kind:'initial',card};
+
+test('browser preview and Gemini request share exactly the confirmed included facts',async()=>{
+  const mixed={...input,tone:'formal',card:{...card,
+    cost:{value:'제외할 비용 정보',included:false,status:'confirmed',source:'프로젝트 정보'},
+    exception:{value:'미확인 예외',included:false,status:'needs_review',source:'자료'},
+  }};
+  const preview=prepareNoticeGeneration(mixed);
+  assert.equal(NOTICE_TONE_LABELS.formal,'정중하고 차분하게');
+  assert.deepEqual(preview.preview.map(item=>item.label),['무엇을','해야 할 일','마감','링크·자료']);
+  let firstRequest,calls=0;
+  const generator=createNoticeGenerator({apiKey:'test',model:'gemini-3.7-flash',generate:async request=>{
+    if(++calls===1){firstRequest=request;return {text:'건강검진을 신청해주세요. 10월 16일 18:00까지 검진기관을 선택하세요.'};}
+    return {text:'{"supported":true,"issues":[]}'};
+  }});
+  await generator.generate(mixed);
+  const sent=JSON.parse(firstRequest.contents[0].text);
+  assert.deepEqual(sent.confirmedFacts,preview.confirmedFacts);
+  assert.ok(!firstRequest.contents[0].text.includes('제외할 비용 정보'));
+  assert.ok(!firstRequest.contents[0].text.includes('미확인 예외'));
+  assert.throws(()=>prepareNoticeGeneration({...mixed,card:{...mixed.card,exception:{...mixed.card.exception,included:true}}}),/예외·유의사항 항목을 확인/);
+  assert.throws(()=>prepareNoticeGeneration({...mixed,card:{...mixed.card,exception:{...mixed.card.exception,value:'',included:true}}}),/예외·유의사항 항목을 입력/);
+});
 
 test('Gemini receives only included confirmed facts and blocks invented links',async()=>{
   let request,calls=0;

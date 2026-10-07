@@ -2,6 +2,56 @@ export const NOTICE_PURPOSES = {initial:'첫 안내',reminder:'추가 신청 안
 
 export const BRIEF_LABELS={what:'무엇을',audience:'대상',action:'해야 할 일',deadline:'마감',schedule:'언제·어디서',method:'신청 방법',cost:'비용·지원',exception:'예외·유의사항',contact:'문의',links:'링크·자료'};
 
+// These are the project facts used to prepare a notice. Keep the source values,
+// rather than rendered card text, so a saved draft can be compared after edits.
+export const NOTICE_PROJECT_FIELDS=['name','audience','event','eventLabel','location','deadlineAt','requirements','applicationUrl','owner'];
+
+export function noticeProjectSnapshot(project) {
+  const source=project||{};
+  return Object.fromEntries(NOTICE_PROJECT_FIELDS.map(key=>[key,String(source[key]??'')]));
+}
+
+export function prepareNoticeDraft(project, values={}) {
+  return {
+    ...values,
+    brief:values.brief?structuredClone(values.brief):makeNoticeBrief(project),
+    projectSnapshot:noticeProjectSnapshot(project),
+    projectReviewRequired:false,
+  };
+}
+
+export function compareDraftProject(draft, project) {
+  const current=noticeProjectSnapshot(project);
+  const stored=draft?.projectSnapshot;
+  if(!stored || typeof stored!=='object')return {reviewRequired:true,legacy:true,changed:[],current};
+  const changed=NOTICE_PROJECT_FIELDS.filter(key=>String(stored[key]??'')!==current[key])
+    .map(key=>({field:key,previous:String(stored[key]??''),current:current[key]}));
+  return {reviewRequired:changed.length>0,legacy:false,changed,current};
+}
+
+export function restoreNoticeDraft(saved, project) {
+  const draft=structuredClone(saved||{});
+  draft.brief=draft.brief&&typeof draft.brief==='object'?draft.brief:makeNoticeBrief(project);
+  const comparison=compareDraftProject(draft,project);
+  draft.projectReviewRequired=comparison.reviewRequired;
+  // Approval is session-only. A loaded draft must always be confirmed again.
+  draft.confirmed=false;
+  draft.confirmedSignature='';
+  return {draft,comparison};
+}
+
+export function acceptProjectReview(draft, project, reviewedBrief) {
+  if(!reviewedBrief || typeof reviewedBrief!=='object')throw new Error('이번 안내의 정보를 확인해주세요.');
+  const next=structuredClone(draft);
+  next.brief=structuredClone(reviewedBrief);
+  next.projectSnapshot=noticeProjectSnapshot(project);
+  next.projectReviewRequired=false;
+  next.confirmed=false;
+  next.confirmedSignature='';
+  next.briefStale=true;
+  return next;
+}
+
 export function makeNoticeBrief(project) {
   const p=project||{};
   const requirements=String(p.requirements||'');
@@ -35,7 +85,7 @@ export function generationSignature(input,recipients) {
 }
 
 export function acceptNoticeCandidate(draft,candidate,currentSignature) {
-  if(!candidate || candidate.signature!==currentSignature || typeof candidate.body!=='string' || !candidate.body.trim())return false;
+  if(draft?.projectReviewRequired || !candidate || candidate.signature!==currentSignature || typeof candidate.body!=='string' || !candidate.body.trim())return false;
   draft.body=candidate.body;
   draft.generatedAt=candidate.generatedAt;
   draft.generatedModel=candidate.model;
