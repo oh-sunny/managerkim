@@ -39,3 +39,9 @@ test('preflight includes a newer operator confirmation and still detects later S
   assert.notEqual(sheetSendSnapshot({...source,events:[sheetEvent,latestEvent],applications:[{projectId:'health',employeeId:1,status:'cancelled'}]},'health',teams,[operatorEvent]),approved);
   assert.throws(()=>sheetSendSnapshot(source,'health',teams,[operatorEvent]),/신청 이력/);
 });
+
+test('preflight ignores a historical operator action outside the current Sheet targets',()=>{
+  const past={id:'manual-old',projectId:'health',employeeId:99,toStatus:'confirmed',at:'2026-10-07T10:00',source:'operator'};
+  assert.equal(sheetSendSnapshot({...source,events:undefined},'health',teams,[past]),
+    projectSendSnapshot(project,employees,applications));
+});

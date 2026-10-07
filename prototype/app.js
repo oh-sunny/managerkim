@@ -7,11 +7,12 @@ import {NOTICE_PURPOSES,BRIEF_LABELS,makeNoticeBrief,prepareNoticeDraft,restoreN
 import {makeNoticeResource,latestProjectResources,snapshotSimulatedNotice} from './notice-resources.js';
 import {prepareNoticeGeneration,NOTICE_TONE_LABELS} from './notice-generation-input.js';
 import {projectSendSnapshot,sheetSendSnapshot} from './send-preflight.js';
-import {mergeSheetApplications} from './sheet-application-merge.js';
+import {mergeSheetApplications,operatorEventsForCurrentTargets} from './sheet-application-merge.js';
+import {sheetSyncRunNotice,sheetSyncResponseNotice} from './sheet-sync-feedback.js';
 import {newProjectId} from './project-id.js';
 import {quickRecipientSelection,recipientGroups,recipientCounts,recipientGroupLabel} from './recipient-selection.js';
 import {mergeOperatorPayload} from './operator-merge.js';
-import {configureSupabase,restoreSupabaseUser,signInSupabase,signOutSupabase,accessToken,supabaseRequest,readOperatorState,saveOperatorState as saveStateDirect,readSheetSnapshot,readAutomationTickets,readDrafts,readDraft,saveDraft,createFileUrl,uploadNoticeResource} from './supabase-browser.js';
+import {configureSupabase,restoreSupabaseUser,signInSupabase,signOutSupabase,accessToken,supabaseRequest,readOperatorState,saveOperatorState as saveStateDirect,readSheetSnapshot,readLatestSheetSyncRun,readAutomationTickets,readDrafts,readDraft,saveDraft,createFileUrl,uploadNoticeResource} from './supabase-browser.js';
 const $ = selector => document.querySelector(selector);
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const icons = {
@@ -110,6 +111,7 @@ let sheetSyncBusy = false;
 let sendPreflightBusy = false;
 const sendPreflightErrors = new Map();
 let sheetSyncError = '';
+let sheetSyncNotice = '';
 let officialCalendar = null;
 let holidayError = '';
 let operatorVersion = 0;
@@ -388,7 +390,7 @@ async function initializeSheetSource(){sheetSourceStatus.configured=cloudConfigu
 function sheetSourcePanel(){
   const link=sheetSourceStatus.spreadsheetId?`<a href="https://docs.google.com/spreadsheets/d/${encodeURIComponent(sheetSourceStatus.spreadsheetId)}/edit" target="_blank" rel="noopener noreferrer">예시 스프레드시트 열기 ${icon('external')}</a>`:'';
   const last=sheetSync?.lastSuccessAt?new Date(sheetSync.lastSuccessAt).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}):null;
-  return `<section class="panel sheet-source-panel"><div><h2>Google 스프레드시트 원본</h2><p class="caption muted">서버에 저장된 직원명부·프로젝트·대상·신청이력을 표시합니다. 정기 작업을 설정하면 매시간 갱신하고, 지금 가져오기를 누르면 바로 다시 확인해요.</p><p class="caption">${sheetSyncError?escapeHtml(sheetSyncError):last?`마지막 가져오기: ${escapeHtml(last)} · 직원 ${sheetSync.employeeCount}명 · 이력 ${sheetSync.eventCount}건`:sheetSourceStatus.configured?'첫 동기화를 기다리고 있어요.':'서버 연결 설정이 필요합니다.'}</p>${link}</div><button class="button" data-action="sync-sheet" ${sheetSyncBusy||!sheetSourceStatus.configured||!cloudUser?'disabled':''}>${sheetSyncBusy?'가져오는 중…':'지금 가져오기'}</button></section>`;
+  return `<section class="panel sheet-source-panel"><div><h2>Google 스프레드시트 원본</h2><p class="caption muted">서버에 저장된 직원명부·프로젝트·대상·신청이력을 표시합니다. 정기 작업을 설정하면 매시간 갱신하고, 지금 가져오기를 누르면 바로 다시 확인해요.</p><p class="caption">${last?`마지막 가져오기: ${escapeHtml(last)} · 직원 ${sheetSync.employeeCount}명 · 이력 ${sheetSync.eventCount}건`:sheetSourceStatus.configured?'첫 동기화를 기다리고 있어요.':'서버 연결 설정이 필요합니다.'}</p>${sheetSyncError?`<p class="error-message" role="alert">${escapeHtml(sheetSyncError)}</p>`:''}${sheetSyncNotice?`<p class="sheet-sync-notice" role="status">${escapeHtml(sheetSyncNotice)}</p>`:''}${link}</div><button class="button" data-action="sync-sheet" ${sheetSyncBusy||!sheetSourceStatus.configured||!cloudUser?'disabled':''}>${sheetSyncBusy?'가져오는 중…':'지금 가져오기'}</button></section>`;
 }
 function applySheetSource(source,{remote=true}={}){
   if(source?.sync?.status!=='success'||!Array.isArray(source.employees)||!Array.isArray(source.sourceProjects)||!Array.isArray(source.projectTargets)||!Array.isArray(source.events)||!Array.isArray(source.applications))throw new Error('시트의 데이터 형식을 확인해주세요.');
@@ -407,7 +409,8 @@ function applySheetSource(source,{remote=true}={}){
     dataKind:'sheet',lastCheckedAt:kstTime(source.sync.lastSuccessAt),
   }:project);
   const operatorEvents=applicationEvents.filter(event=>projectIds.has(event.projectId)&&event.source!=='sheet'&&!String(event.id).startsWith('sheet:'));
-  const nextApplications=[...applications.filter(row=>!projectIds.has(row.projectId)),...mergeSheetApplications(source.applications,source.events,operatorEvents)];
+  const currentOperatorEvents=operatorEventsForCurrentTargets(operatorEvents,source.projectTargets);
+  const nextApplications=[...applications.filter(row=>!projectIds.has(row.projectId)),...mergeSheetApplications(source.applications,source.events,currentOperatorEvents)];
   const prior=new Map();
   const importedEvents=source.events.map(event=>{
     const key=`${event.projectId}:${event.employeeId}`,fromStatus=prior.get(key)||'none';
@@ -450,17 +453,21 @@ async function refreshAutomatedSheetState(){
     sheetSourceStatus={configured:true,spreadsheetId:snapshot.payload.spreadsheetId};
     if(!sheetSync?.lastSuccessAt||Date.parse(snapshot.last_success_at)>Date.parse(sheetSync.lastSuccessAt))applySheetSource(snapshot.payload,{remote:false});
   }
+  try{sheetSyncNotice=sheetSyncRunNotice(await readLatestSheetSyncRun());}
+  catch { /* Keep the last visible result if the run log is temporarily unavailable. */ }
   applyAutomationTickets(await readAutomationTickets());
   if(route().view!=='edit-project')render();
 }
 async function syncSheetSource(){
   if(!requireOperator()||sheetSyncBusy)return;
-  sheetSyncBusy=true;sheetSyncError='';render();
+  sheetSyncBusy=true;sheetSyncError='';sheetSyncNotice='';render();
   try{
     if(operatorDirty)await saveOperatorState();
     if(operatorDirty)throw new Error('프로젝트 변경을 서버에 저장한 뒤 다시 가져와주세요.');
-    await supabaseRequest('/functions/v1/sync-sheets',{method:'POST'});
-    await refreshAutomatedSheetState();toast('Google Sheets의 직원명부와 신청 이력을 가져왔어요.');
+    const result=await supabaseRequest('/functions/v1/sync-sheets',{method:'POST'});
+    await refreshAutomatedSheetState();
+    sheetSyncNotice=sheetSyncResponseNotice(result);
+    toast(sheetSyncNotice||'Google Sheets의 직원명부와 신청 이력을 가져왔어요.');
   }
   catch(error){sheetSyncError=error.message||'시트를 읽지 못했습니다.';render();}
   finally{sheetSyncBusy=false;render();}
@@ -627,7 +634,7 @@ async function logoutCloud({discard=false}={}) {
   for(const timer of cloudTimers.values())clearTimeout(timer);
   cloudTimers.clear();
   try {await signOutSupabase();} catch { /* Clear this browser session even if the upstream logout fails. */ }
-  cloudUser=null;drafts={};noticeStates.clear();EMPLOYEES=structuredClone(INITIAL_EMPLOYEES);sheetSync=null;sheetSourceStatus.spreadsheetId=null;
+  cloudUser=null;drafts={};noticeStates.clear();EMPLOYEES=structuredClone(INITIAL_EMPLOYEES);sheetSync=null;sheetSyncNotice='';sheetSourceStatus.spreadsheetId=null;
   PROJECTS=structuredClone(INITIAL_PROJECTS);applications=structuredClone(INITIAL_APPLICATIONS);
   applicationEvents=[];records=structuredClone(INITIAL_RECORDS);TICKETS=structuredClone(INITIAL_TICKETS);completed={};
   operatorVersion=0;operatorBasePayload=null;operatorOwnerId=null;operatorDirty=false;operatorConflict=null;operatorConflictPaths=[];operatorDeferredState=null;operatorSaveStatus='local';
@@ -1000,7 +1007,7 @@ function recipientTable(list,p) {
 function sheetReviewReminder(p) {
   if(p.dataKind!=='sheet')return '';
   const last=sheetSync?.lastSuccessAt?new Date(sheetSync.lastSuccessAt).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}):null;
-  return `<section class="panel sheet-source-panel" aria-label="신청 현황 확인"><div><h2>발송 전 신청 현황을 확인해주세요</h2><p class="caption muted">Supabase의 마지막 성공한 동기화 시각: ${last?escapeHtml(last):'아직 가져오지 않음'}</p><p class="caption muted">보내기 직전에도 시트 원본을 다시 확인하고, 변경됐다면 본문과 대상을 다시 검토하도록 멈춥니다.</p>${!cloudUser?'<p class="caption muted">시트를 읽으려면 먼저 로그인해주세요.</p>':''}${sheetSyncError?`<p class="error-message" role="alert">${escapeHtml(sheetSyncError)}</p>`:''}</div><button type="button" class="button" data-action="sync-sheet" ${sheetSyncBusy||!sheetSourceStatus.configured||!cloudUser?'disabled':''}>${sheetSyncBusy?'가져오는 중…':'신청 현황 새로고침'}</button></section>`;
+  return `<section class="panel sheet-source-panel" aria-label="신청 현황 확인"><div><h2>발송 전 신청 현황을 확인해주세요</h2><p class="caption muted">Supabase의 마지막 성공한 시트 저장 시각: ${last?escapeHtml(last):'아직 가져오지 않음'}</p><p class="caption muted">보내기 직전에도 시트 원본을 다시 확인하고, 변경됐다면 본문과 대상을 다시 검토하도록 멈춥니다.</p>${!cloudUser?'<p class="caption muted">시트를 읽으려면 먼저 로그인해주세요.</p>':''}${sheetSyncError?`<p class="error-message" role="alert">${escapeHtml(sheetSyncError)}</p>`:''}${sheetSyncNotice?`<p class="sheet-sync-notice" role="status">${escapeHtml(sheetSyncNotice)}</p>`:''}</div><button type="button" class="button" data-action="sync-sheet" ${sheetSyncBusy||!sheetSourceStatus.configured||!cloudUser?'disabled':''}>${sheetSyncBusy?'가져오는 중…':'신청 현황 새로고침'}</button></section>`;
 }
 function normalizedSelectedResources(t){
   return (getDraft(t).resources||[]).map(item=>({...item,projectId:item.projectId||t.project,
@@ -1388,7 +1395,7 @@ document.addEventListener('click',event=>{
       if(cloudUser){toast('서버 연결 중에는 예시 초기화를 사용할 수 없습니다.');break;}
       if(!resetArmed){resetArmed=true;render();break;}
       if(!window.confirm('이 브라우저의 프로젝트·신청 상태·안내 기록·초안을 예시 데이터로 바꿀까요? 서버 자료는 변경되지 않습니다.'))break;
-      resetArmed=false;noticeStates.clear();EMPLOYEES=structuredClone(INITIAL_EMPLOYEES);sheetSync=null;sheetSyncError='';PROJECTS=structuredClone(INITIAL_PROJECTS);applications=structuredClone(INITIAL_APPLICATIONS);applicationEvents=[];records=structuredClone(INITIAL_RECORDS);TICKETS=structuredClone(INITIAL_TICKETS);completed={};drafts={};calendar={year:Number(TODAY_KST.slice(0,4)),month:Number(TODAY_KST.slice(5,7))-1,selected:TODAY_KST,view:'calendar'};persist({remote:false});render();toast('이 브라우저의 예시 데이터를 초기화했어요.');break;
+      resetArmed=false;noticeStates.clear();EMPLOYEES=structuredClone(INITIAL_EMPLOYEES);sheetSync=null;sheetSyncError='';sheetSyncNotice='';PROJECTS=structuredClone(INITIAL_PROJECTS);applications=structuredClone(INITIAL_APPLICATIONS);applicationEvents=[];records=structuredClone(INITIAL_RECORDS);TICKETS=structuredClone(INITIAL_TICKETS);completed={};drafts={};calendar={year:Number(TODAY_KST.slice(0,4)),month:Number(TODAY_KST.slice(5,7))-1,selected:TODAY_KST,view:'calendar'};persist({remote:false});render();toast('이 브라우저의 예시 데이터를 초기화했어요.');break;
     case 'calendar-today':calendar={year:Number(TODAY_KST.slice(0,4)),month:Number(TODAY_KST.slice(5,7))-1,selected:TODAY_KST,view:'calendar'};refreshCalendar();break;
     case 'new-record':newHistory(button.dataset.project);break;
     case 'close-dialog':closeHistory();break;

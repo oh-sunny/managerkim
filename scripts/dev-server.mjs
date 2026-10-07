@@ -53,6 +53,7 @@ const assets = new Map([
   ['/notice-draft.js', ['notice-draft.js', 'text/javascript; charset=utf-8']],
   ['/send-preflight.js', ['send-preflight.js', 'text/javascript; charset=utf-8']],
   ['/sheet-application-merge.js', ['sheet-application-merge.js', 'text/javascript; charset=utf-8']],
+  ['/sheet-sync-feedback.js', ['sheet-sync-feedback.js', 'text/javascript; charset=utf-8']],
   ['/project-id.js', ['project-id.js', 'text/javascript; charset=utf-8']],
   ['/recipient-selection.js', ['recipient-selection.js', 'text/javascript; charset=utf-8']],
 ]);
