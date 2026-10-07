@@ -29,3 +29,13 @@ test('failed, incomplete and inconsistent source reads cannot pass preflight',()
   assert.throws(()=>sheetSendSnapshot({...source,employees:[{...source.employees[0],teamName:'미등록팀'},source.employees[1]]},'health',teams),/없는 팀/);
   assert.throws(()=>projectSendSnapshot(project,employees,[...applications,...applications]),/신청 상태/);
 });
+
+test('preflight includes a newer operator confirmation and still detects later Sheet changes',()=>{
+  const sheetEvent={projectId:'health',employeeId:1,status:'applied',occurredAt:'2026-10-06T01:00:00Z'};
+  const operatorEvent={id:'manual-1',projectId:'health',employeeId:1,toStatus:'confirmed',at:'2026-10-07T10:00',source:'operator'};
+  const approved=projectSendSnapshot(project,employees,[{projectId:'health',employeeId:1,status:'confirmed'}]);
+  assert.equal(sheetSendSnapshot({...source,events:[sheetEvent]},'health',teams,[operatorEvent]),approved);
+  const latestEvent={...sheetEvent,status:'cancelled',occurredAt:'2026-10-07T02:00:00Z'};
+  assert.notEqual(sheetSendSnapshot({...source,events:[sheetEvent,latestEvent],applications:[{projectId:'health',employeeId:1,status:'cancelled'}]},'health',teams,[operatorEvent]),approved);
+  assert.throws(()=>sheetSendSnapshot(source,'health',teams,[operatorEvent]),/신청 이력/);
+});

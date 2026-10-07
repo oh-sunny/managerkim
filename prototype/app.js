@@ -946,7 +946,7 @@ async function simulateSend(t) {
       if(!approvedSource)throw new Error('승인 당시 신청 현황이 없습니다. 본문과 대상을 다시 확인해주세요.');
       const source=await cloudRequest('/api/sheets/sync',{method:'POST'});
       if(!approvedSpreadsheetId||source.spreadsheetId!==approvedSpreadsheetId)throw new Error('승인할 때 사용한 Google Sheets 원본과 현재 원본이 다릅니다. 다시 확인해주세요.');
-      const latest=sheetSendSnapshot(source,t.project,new Map(TEAMS.map(team=>[team.name,team.id])));
+      const latest=sheetSendSnapshot(source,t.project,new Map(TEAMS.map(team=>[team.name,team.id])),applicationEvents.filter(event=>event.projectId===t.project&&event.source!=='sheet'&&!String(event.id).startsWith('sheet:')));
       if(latest!==approvedSource){
         d.confirmed=false;d.confirmedSignature='';d.confirmedSourceSnapshot='';d.confirmedSpreadsheetId='';
         applySheetSource(source);

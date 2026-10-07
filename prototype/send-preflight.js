@@ -1,3 +1,5 @@
+import {mergeSheetApplications} from './sheet-application-merge.js';
+
 // Snapshot only the source facts that determine who receives an announcement.
 export function projectSendSnapshot(project,employees,applications) {
   if(!project||!Array.isArray(project.targetIds)||!Array.isArray(project.requiredIds)||
@@ -22,7 +24,7 @@ export function projectSendSnapshot(project,employees,applications) {
   });
 }
 
-export function sheetSendSnapshot(source,projectId,teamByName) {
+export function sheetSendSnapshot(source,projectId,teamByName,operatorEvents=[]) {
   if(source?.sync?.status!=='success'||!source.sync.lastSuccessAt||
      !Array.isArray(source.employees)||!Array.isArray(source.sourceProjects)||
      !Array.isArray(source.projectTargets)||!Array.isArray(source.applications)||
@@ -34,5 +36,7 @@ export function sheetSendSnapshot(source,projectId,teamByName) {
     if(!team)throw new Error('Google Sheets에 웹앱에 없는 팀이 있습니다.');
     return {...row,team};
   });
-  return projectSendSnapshot({id:projectId,...targets[0]},employees,source.applications);
+  if(operatorEvents.length&&!Array.isArray(source.events))throw new Error('Google Sheets의 신청 이력을 확인하지 못했습니다.');
+  const applications=operatorEvents.length?mergeSheetApplications(source.applications,source.events,operatorEvents):source.applications;
+  return projectSendSnapshot({id:projectId,...targets[0]},employees,applications);
 }
