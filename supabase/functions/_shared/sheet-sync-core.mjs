@@ -9,7 +9,11 @@ export function buildScheduledSync({source, operatorState, previousTickets = [],
   const targets = new Map(source.projectTargets.map(row => [row.projectId, row]));
   const sourceIds = new Set(source.sourceProjects.map(project => project.id));
   for (const id of sourceIds) if (!byProject.has(id)) throw new Error(`웹앱에 없는 프로젝트 ID가 시트에 있습니다: ${id}`);
-  const operatorEvents = (state.applicationEvents || []).filter(event => sourceIds.has(event.projectId) && event.source !== 'sheet');
+  // A local correction for someone no longer in the Sheet roster is not a Sheet source row.
+  // Keep it in operator state, but do not let it invalidate every scheduled decision.
+  const operatorEvents = (state.applicationEvents || []).filter(event =>
+    sourceIds.has(event.projectId) && event.source !== 'sheet' &&
+    targets.get(event.projectId)?.targetIds.includes(event.employeeId));
   const applications = mergeSheetApplications(source.applications, source.events, operatorEvents);
   const existingByKey = new Map(previousTickets.filter(ticket => ticket?.key).map(ticket => [ticket.key, ticket]));
   for (const ticket of state.tickets.filter(ticket => ticket?.key)) existingByKey.set(ticket.key, ticket);
