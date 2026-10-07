@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {projectSendSnapshot,sheetSendSnapshot} from '../prototype/send-preflight.js';
+import {projectSendSnapshot,sheetSendSnapshot} from '../web/send-preflight.js';
 
 const project={id:'health',targetIds:[2,1],requiredIds:[1]};
 const employees=[{id:1,name:'김가상',team:'operations'},{id:2,name:'이가상',team:'design'}];

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mergeOperatorPayload} from '../prototype/operator-merge.js';
+import {mergeOperatorPayload} from '../web/operator-merge.js';
 
 test('separate project changes merge without replacing either edit', () => {
   const base={projects:[{id:'a',name:'A'},{id:'b',name:'B'}],tickets:[]};

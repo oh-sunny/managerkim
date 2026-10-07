@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {extractProjectCandidates} from '../prototype/document-extract.js';
+import {extractProjectCandidates} from '../web/document-extract.js';
 
 test('structured plan yields candidates with the source lines',()=>{
   const result=extractProjectCandidates(`프로젝트 제목: 가을 워크숍

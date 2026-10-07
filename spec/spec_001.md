@@ -1,4 +1,4 @@
-# spec_001 현재 프로토타입 기능 명세
+# spec_001 현재 웹앱 기능 명세
 
 작성일: 2026년 10월 3일  
 수정일: 2026년 10월 7일
@@ -97,7 +97,7 @@
 
 - 메시지 본문을 직접 입력하거나 수정할 수 있습니다.
 - 말투와 공지 목적을 선택해도 현재 본문은 유지됩니다. ‘Gemini로 새 초안 문구 생성’을 누르면 검증된 새 문구가 메시지 본문 입력 칸에 바로 들어가고 초안 저장을 시작합니다. Gemini에는 일반 텍스트를 요청하고, 반환된 굵게 표시용 `**` 쌍은 새 본문에 넣기 전에 제거합니다. 이미 저장된 본문은 자동 수정하지 않습니다. 생성 직전 본문으로 되돌릴 수 있습니다. 생성 중 본문·정보 카드·대상이 바뀌면 결과로 덮어쓰지 않습니다. 목적은 연결 티켓에서 첫 안내 또는 추가 안내를 추정합니다.
-- 공지 정보 카드의 항목을 수정·제외할 수 있습니다. 서버는 포함된 카드 값만 Gemini에 보내고 날짜·링크·수치 및 근거 없는 주장을 검사합니다. `prototype/message-templates.js`는 테스트에 남아 있지만 현재 검토 화면의 생성 경로는 Gemini를 사용합니다.
+- 공지 정보 카드의 항목을 수정·제외할 수 있습니다. 서버는 포함된 카드 값만 Gemini에 보내고 날짜·링크·수치 및 근거 없는 주장을 검사합니다. `web/message-templates.js`는 테스트에 남아 있지만 현재 검토 화면의 생성 경로는 Gemini를 사용합니다.
 - ‘무엇을·해야 할 일·마감’ 중 빠진 항목이 있으면 생성 버튼 위에 필요한 내용을 표시하고 해당 카드 입력란으로 이동합니다. 마감이 지난 신청 안내에는 마감 재확인을 표시하고 보내기 예시를 막습니다.
 - 정보 카드에서는 본문 확인을 요구하지 않습니다. 카드의 확인된 값으로 Gemini 초안을 생성하면 본문 재검토 상태가 해소됩니다. 정보 카드를 바꾼 뒤 직접 작성한 본문을 유지할 때에만 본문 옆에서 최신 정보와 맞는지 확인합니다.
 - 본문을 수정하거나 새 말투를 적용하면 기존 보내기 확인 체크를 해제합니다.
@@ -228,16 +228,16 @@ Sheets 기반 프로젝트에서 **모의 발송**을 누르면 브라우저가 
 
 | 파일 | 역할 |
 | --- | --- |
-| `prototype/index.html` | 운영 웹앱의 메뉴, 본문과 안내 기록 창 구조 |
-| `prototype/styles.css` | 화면 디자인, 반응형 배치와 포커스 표시 |
-| `prototype/app.js` | 예시 데이터, 화면 이동, Sheets 수동 가져오기, 규칙 티켓·초안·대상·기록·저장 처리 |
-| `prototype/data.js` | 신청 기록을 현황으로 계산하는 공통 로직 |
-| `prototype/document-extract.js` | 구조화된 텍스트 기획서에서 근거가 있는 운영 정보 후보 추출 |
-| `prototype/message-templates.js` | 예시 템플릿과 자동 테스트용 문구. 현재 Gemini 생성 화면에서는 직접 사용하지 않음 |
-| `prototype/rule-engine.js` | 공휴일·신청 상태를 반영한 규칙 티켓 평가 |
-| `prototype/recipient-selection.js`, `prototype/send-preflight.js` | 필수 대상 빠른 선택·인원 구분과 모의 발송 직전 Sheets 상태 비교 |
+| `web/index.html` | 운영 웹앱의 메뉴, 본문과 안내 기록 창 구조 |
+| `web/styles.css` | 화면 디자인, 반응형 배치와 포커스 표시 |
+| `web/app.js` | 예시 데이터, 화면 이동, Sheets 수동 가져오기, 규칙 티켓·초안·대상·기록·저장 처리 |
+| `web/data.js` | 신청 기록을 현황으로 계산하는 공통 로직 |
+| `web/document-extract.js` | 구조화된 텍스트 기획서에서 근거가 있는 운영 정보 후보 추출 |
+| `web/message-templates.js` | 예시 템플릿과 자동 테스트용 문구. 현재 Gemini 생성 화면에서는 직접 사용하지 않음 |
+| `web/rule-engine.js` | 공휴일·신청 상태를 반영한 규칙 티켓 평가 |
+| `web/recipient-selection.js`, `web/send-preflight.js` | 필수 대상 빠른 선택·인원 구분과 모의 발송 직전 Sheets 상태 비교 |
 | `scripts/dev-server.mjs` | 로컬 화면과 Supabase API 제공, `.env` 읽기 |
-| `prototype/supabase-browser.js` | 브라우저 Supabase Auth·운영 상태·초안·비공개 안내 파일 직접 업로드/열람 |
+| `web/supabase-browser.js` | 브라우저 Supabase Auth·운영 상태·초안·비공개 안내 파일 직접 업로드/열람 |
 | `scripts/supabase-api.mjs` | 기존 Auth·운영 상태 호환 API, Sheets 수동 조회, Gemini 분석/생성 |
 | `scripts/google-sheets-service.mjs`, `scripts/google-sheets-source.mjs` | 서비스 계정 인증과 네 탭 읽기·정규화 |
 | `scripts/notice-generation.mjs` | 카드 기반 Gemini 초안 생성과 사실 검사 |

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {configureSupabase,signInSupabase,signOutSupabase,restoreSupabaseUser,accessToken,readOperatorState,readDraft,saveDraft,uploadNoticeResource} from '../prototype/supabase-browser.js';
-import {draftStorageId} from '../prototype/draft-storage-id.js';
+import {configureSupabase,signInSupabase,signOutSupabase,restoreSupabaseUser,accessToken,readOperatorState,readDraft,saveDraft,uploadNoticeResource} from '../web/supabase-browser.js';
+import {draftStorageId} from '../web/draft-storage-id.js';
 
 test('generated ticket IDs use a stable database-safe draft ID without changing existing IDs', async t => {
   const previousFetch=globalThis.fetch,previousStorage=globalThis.sessionStorage;

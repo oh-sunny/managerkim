@@ -1,7 +1,7 @@
 import {GoogleGenAI} from '@google/genai';
 import {createHash} from 'node:crypto';
 import {isGeminiModel,thinkingConfigFor} from './gemini-config.mjs';
-import {BRIEF_FIELDS,prepareNoticeGeneration} from '../prototype/notice-generation-input.js';
+import {BRIEF_FIELDS,prepareNoticeGeneration} from '../web/notice-generation-input.js';
 
 export {BRIEF_FIELDS};
 const purposeRules={

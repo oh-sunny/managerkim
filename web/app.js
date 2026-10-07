@@ -1264,7 +1264,7 @@ function openSendPreview(t) {
   const targets=d.mode==='dm'?dmPreviewTargets(p,a):`<p class="preview-target-summary">채널 ${a.channels.length}곳에 각각 게시 · 고유 공개 인원 ${a.list.length}명</p><div class="preview-target-list">${a.channelAudiences.map(({channel,members})=>`<span>${escapeHtml(channel.name)} · 예시 구성원 ${members.length}명 · 프로젝트 대상 외 ${members.filter(e=>!p.targetIds.includes(e.id)).length}명</span>`).join('')}</div>`;
   const sourceCheck=`<p class="preview-source-check"><strong>${p.dataKind==='sheet'?'Google Sheets 원본 마지막 가져오기':'최근 신청 현황 확인'}</strong> ${p.lastCheckedAt?escapeHtml(p.lastCheckedAt.replace('T',' '))+' (한국시간)':'확인 시각 없음'}${p.dataKind==='sheet'?'<br>모의 발송 직전에 원본을 다시 조회하고 변경 여부를 확인합니다.':''}</p>`;
   const resources=(d.resources||[]).map(item=>`<div class="draft-resource"><span>${item.kind==='file'?'첨부 파일':'본문 링크'} · ${escapeHtml(item.label)}</span>${item.kind==='link'?`<span>${escapeHtml(item.url)}</span>`:''}</div>`).join('')||'<p class="help">선택한 자료 없음</p>';
-  $('#send-preview-dialog').innerHTML=`<div class="dialog-heading"><div><p class="eyebrow">최종 확인</p><h2 id="send-preview-title">보낼 본문과 대상을 확인해주세요</h2><p>${escapeHtml(p.name)} · ${escapeHtml(t.title)}</p></div><button class="button icon-button" data-action="close-preview" aria-label="최종 확인 창 닫기">${icon('close')}</button></div><div class="dialog-body"><h3>메시지 본문</h3><div class="message-original">${escapeHtml(d.body)}</div>${d.resources?.length?`<h3>첨부 자료</h3>${resources}`:''}<h3>${d.mode==='dm'?'DM을 받을 동료':'게시할 채널과 공개 범위'}</h3>${targets}${sourceCheck}<label class="confirm-row preview-confirm"><input type="checkbox" id="preview-ack"><span>위 본문·자료와 ${d.mode==='dm'?'받을 동료':'게시할 채널'}를 확인했어요.</span></label></div><div class="dialog-footer"><span class="help">이번 프로토타입에서는 실제 메시지를 보내지 않아요.</span><div class="actions"><button class="button" data-action="close-preview">돌아가기</button><button class="button primary" data-action="confirm-preview" disabled>확인 완료</button></div></div>`;
+  $('#send-preview-dialog').innerHTML=`<div class="dialog-heading"><div><p class="eyebrow">최종 확인</p><h2 id="send-preview-title">보낼 본문과 대상을 확인해주세요</h2><p>${escapeHtml(p.name)} · ${escapeHtml(t.title)}</p></div><button class="button icon-button" data-action="close-preview" aria-label="최종 확인 창 닫기">${icon('close')}</button></div><div class="dialog-body"><h3>메시지 본문</h3><div class="message-original">${escapeHtml(d.body)}</div>${d.resources?.length?`<h3>첨부 자료</h3>${resources}`:''}<h3>${d.mode==='dm'?'DM을 받을 동료':'게시할 채널과 공개 범위'}</h3>${targets}${sourceCheck}<label class="confirm-row preview-confirm"><input type="checkbox" id="preview-ack"><span>위 본문·자료와 ${d.mode==='dm'?'받을 동료':'게시할 채널'}를 확인했어요.</span></label></div><div class="dialog-footer"><span class="help">이 화면에서는 실제 메시지를 보내지 않아요.</span><div class="actions"><button class="button" data-action="close-preview">돌아가기</button><button class="button primary" data-action="confirm-preview" disabled>확인 완료</button></div></div>`;
   $('#send-preview-dialog').showModal();
 }
 function closeSendPreview() {
@@ -1306,13 +1306,13 @@ function saveNewHistoryForm(event) {
   event.preventDefault();if(!requireOperator())return;const url=slackUrl($('#record-url').value),body=$('#record-body').value.trim();
   if(url===null){historyError('Slack 메시지 링크를 확인해주세요. HTTPS로 시작하는 Slack 메시지 주소를 넣어주세요.');return;}
   if(!body&&!url){historyError('안내 원문 또는 Slack 메시지 링크 중 하나를 넣어주세요.');return;}
-  if(records.length>=100){historyError('프로토타입에는 안내 기록을 100개까지 저장할 수 있어요.');return;}
+  if(records.length>=100){historyError('안내 기록은 100개까지 저장할 수 있어요.');return;}
   const record={id:crypto.randomUUID(),project:$('#record-project').value,kind:$('#record-kind').value,title:$('#record-title').value.trim(),date:$('#record-date').value,route:$('#record-route').value.trim(),body,url,source:'manual'};
   if(!record.title||!record.route||!validRecord(record)){historyError('제목, 날짜와 보낸 곳을 확인해주세요.');return;}
   records.push(record);const saved=persist();closeHistory();render();if(saved)toast('이 브라우저에 안내 기록을 추가했어요. 상단에서 서버 저장 완료를 확인해주세요.');
 }
 async function simulateSend(t) {
-  if(!canSend(t))return;if(records.length>=100){toast('프로토타입의 안내 기록 저장 한도에 도달했어요.');return;}
+  if(!canSend(t))return;if(records.length>=100){toast('안내 기록 저장 한도에 도달했어요.');return;}
   const d=getDraft(t),approvedSignature=approvalSignature(t),approvedSource=d.confirmedSourceSnapshot,approvedSpreadsheetId=d.confirmedSpreadsheetId;
   sendPreflightBusy=true;sendPreflightErrors.delete(t.id);
   const button=$('#send-button');if(button){button.disabled=true;button.textContent='최신 신청 현황 확인 중…';}

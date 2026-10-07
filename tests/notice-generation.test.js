@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {createNoticeGenerator,validateNoticeInput,BRIEF_FIELDS} from '../scripts/notice-generation.mjs';
-import {prepareNoticeGeneration,NOTICE_TONE_LABELS} from '../prototype/notice-generation-input.js';
+import {prepareNoticeGeneration,NOTICE_TONE_LABELS} from '../web/notice-generation-input.js';
 import {createPublicHolidayCalendar} from '../scripts/public-holidays.mjs';
-import {generationSignature,acceptNoticeCandidate,makeNoticeBrief} from '../prototype/notice-draft.js';
+import {generationSignature,acceptNoticeCandidate,makeNoticeBrief} from '../web/notice-draft.js';
 
 const card=Object.fromEntries(BRIEF_FIELDS.map(key=>[key,{value:'',included:false,status:'missing',source:'직접 입력'}]));
 card.what={value:'건강검진 신청 안내',included:true,status:'confirmed',source:'프로젝트 정보'};

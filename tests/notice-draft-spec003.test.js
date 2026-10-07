@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {prepareNoticeDraft,compareDraftProject,restoreNoticeDraft,acceptProjectReview,acceptNoticeCandidate,noticePurposeForTicket} from '../prototype/notice-draft.js';
-import {makeNoticeResource,reviseNoticeResource,selectNoticeResources,latestProjectResources,snapshotSimulatedNotice} from '../prototype/notice-resources.js';
-import {createNoticeResourceStore,resourceToRow,resourceFromRow} from '../prototype/notice-resource-store.js';
+import {prepareNoticeDraft,compareDraftProject,restoreNoticeDraft,acceptProjectReview,acceptNoticeCandidate,noticePurposeForTicket} from '../web/notice-draft.js';
+import {makeNoticeResource,reviseNoticeResource,selectNoticeResources,latestProjectResources,snapshotSimulatedNotice} from '../web/notice-resources.js';
+import {createNoticeResourceStore,resourceToRow,resourceFromRow} from '../web/notice-resource-store.js';
 
 const project={name:'건강검진',audience:'전 직원',requirements:'검진기관을 선택해 신청',deadlineAt:'2026-10-16T18:00',applicationUrl:'https://example.org/apply'};
 

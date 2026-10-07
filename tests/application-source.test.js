@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {normalizeApplicationSource, tryNormalizeApplicationSource} from '../scripts/application-source.mjs';
 import {mapSheetRows, readGoogleSheetsApplicationSource, readGoogleSheetsWorkspaceSource} from '../scripts/google-sheets-source.mjs';
-import {calculateStatus} from '../prototype/data.js';
+import {calculateStatus} from '../web/data.js';
 
 const base = {
   knownEmployeeIds:[1, 2], knownProjectIds:['health'], lastSuccessAt:'2026-10-06T09:00:00+09:00',

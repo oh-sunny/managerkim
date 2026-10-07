@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import yauzl from 'yauzl';
 import { XMLParser } from 'fast-xml-parser';
-import { ANALYSIS_LIMITS as limits } from '../prototype/analysis-contract.js';
+import { ANALYSIS_LIMITS as limits } from '../web/analysis-contract.js';
 
 export const analysisError = (message, status = 422) => Object.assign(new Error(message), { status, publicMessage: message });
 const require = createRequire(import.meta.url);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {newProjectId} from '../prototype/project-id.js';
+import {newProjectId} from '../web/project-id.js';
 
 test('new project can use the exact Sheet project ID and rejects a duplicate', () => {
   assert.equal(newProjectId(' autumn-fair ', ['health'], () => 'unused'), 'autumn-fair');

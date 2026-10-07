@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {parseIdList, calculateStatus, setApplication, applicationBreakdown, sortTicketsForDisplay} from '../prototype/data.js';
+import {parseIdList, calculateStatus, setApplication, applicationBreakdown, sortTicketsForDisplay} from '../web/data.js';
 
 const employees=[{id:1},{id:2},{id:3}];
 const project={id:'p',targetIds:[1,2],requiredIds:[2],lastCheckedAt:'2026-10-05T10:00'};

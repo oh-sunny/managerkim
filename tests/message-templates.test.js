@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildDraftMessage} from '../prototype/message-templates.js';
+import {buildDraftMessage} from '../web/message-templates.js';
 
 const details={title:'연례 건강검진',deadline:'10월 5일 18:00',owner:'김총무',applicationUrl:'https://example.org/apply'};
 
